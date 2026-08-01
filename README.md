@@ -16,8 +16,11 @@ Built with [ClojureScript](https://clojurescript.org/),
 
 ## Prerequisites
 
-- Node.js (18+) and npm
-- A JVM (Java 11+) — shadow-cljs runs on it
+- Node.js (20+) and npm
+- A JVM (Java **21+**) — shadow-cljs 3.x runs on it and requires Java 21.
+  If you're stuck on an older JVM, pin `"shadow-cljs": "^2.28.20"` in
+  `package.json` instead; it works with Java 11+ (its `npm audit` noise
+  is dev-time only and never reaches the browser bundle).
 
 ## Development
 
@@ -26,7 +29,9 @@ npm install
 npm run dev
 ```
 
-Then open <http://localhost:8080>. shadow-cljs hot-reloads code on save.
+Then open <http://localhost:8080>. If that port is taken, shadow-cljs
+picks the next free one — check its startup output. shadow-cljs
+hot-reloads code on save.
 For a REPL into the running app: `npm run repl` (or connect your editor
 to the nREPL port shadow-cljs prints on startup).
 
