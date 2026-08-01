@@ -18,3 +18,7 @@ node_modules/
 .shadow-cljs/
 public/js/
 .clj-kondo/.cache/
+.clj-kondo/imports/
+
+.idea/
+.lsp/

@@ -1,7 +1,5 @@
-{:source-paths ["src"]
-
- :dependencies [[reagent "1.2.0"]
-                [funcool/promesa "11.0.678"]]
+;; Source paths and dependencies live in deps.edn — see :deps below.
+{:deps true
 
  ;; serves public/ during development
  :dev-http {8080 "public"}
