@@ -1,5 +1,11 @@
 {:paths ["src"]
 
- :deps {thheller/shadow-cljs {:mvn/version "2.28.20"}
+ ;; With :deps true in shadow-cljs.edn, this file controls the JVM
+ ;; classpath — including which shadow-cljs compiler version runs (the
+ ;; npm package is only the launcher). Keep this version in step with
+ ;; the one in package.json devDependencies. 3.x is required: its newer
+ ;; Closure compiler parses modern JS syntax (e.g. private class
+ ;; fields in jose v6) that 2.x cannot.
+ :deps {thheller/shadow-cljs {:mvn/version "3.4.11"}
         reagent/reagent      {:mvn/version "1.2.0"}
         funcool/promesa      {:mvn/version "11.0.678"}}}
