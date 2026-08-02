@@ -66,6 +66,10 @@ Hence `?reset`, handled by `auth/recover-from-url!`, which deletes the
 `localhost:8080` in DevTools does the same thing, if you can get the
 page to sit still long enough.
 
+This is a dynamic-registration problem, so it goes away once dev builds
+use a published client identifier — see [Client
+identity](#client-identity).
+
 ## Release build
 
 ```sh
@@ -130,6 +134,66 @@ read degrades to a plain link rather than a broken image.
 Avatars are still plain `src` attributes, on the assumption that profile
 photos are public. If you hit a 401 on one, route it through
 `authed-media` too.
+
+## Client identity
+
+An identity provider needs to know *which app* is asking for access. By
+default `solid-client-authn-browser` registers a throwaway client on
+every interactive login — it clears the stored registration unless the
+login is a silent one — so the app shows up as a brand new stranger each
+time, and old registrations pile up server-side until the provider
+prunes them. When that happens mid-session you get the lockout described
+above.
+
+Instead, this app publishes a **client identifier document**: a JSON-LD
+file whose URL *is* the client ID. The provider fetches it during login
+and takes the app's name and its permitted redirect URIs from it. There
+is no client secret — a browser app can't keep one — so `redirect_uris`
+is the whole security boundary: it's what guarantees an authorization
+code issued for this app can only ever be delivered back to this app.
+
+There are two documents, deliberately:
+
+| File | Identity | Redirect URIs |
+|---|---|---|
+| `public/clientid.jsonld` | `Solid Social` — the published app | the GitHub Pages URL |
+| `public/clientid-dev.jsonld` | `Solid Social (local development)` | `http://localhost:8080/` |
+
+They're split because anyone may use a published client ID in their own
+authorization request. If the real app's document permitted localhost
+redirects, someone could compose a request that shows the victim a
+consent screen reading "Solid Social" and have the code delivered to
+`localhost` on the victim's own machine — harmless unless something
+hostile is listening on that port, but developers do run things on 8080,
+and on node-solid-server trust is granted per *origin*, so a single
+`http://localhost:8080` entry covers every app ever run there. Keeping
+localhost on a throwaway identity that carries no reputation removes the
+incentive, and that document can be rotated or deleted at will.
+
+The ID used at build time comes from a `goog-define` in `auth.cljs`, set
+per build in `shadow-cljs.edn`:
+
+- `npm run release` → the published identity.
+- `npm run dev` → **empty, so dynamic registration** — a provider can't
+  fetch a client document from `localhost`, so the dev document only
+  becomes usable once the site is published somewhere. At that point
+  uncomment the `:dev` block in `shadow-cljs.edn`.
+
+Two things to verify the first time the site is published, before
+trusting any of this:
+
+1. That the document is served as `application/ld+json`. GitHub Pages
+   may not map the `.jsonld` extension and could serve it as plain
+   text, which some providers reject:
+   `curl -sI https://insano10.github.io/solid-social/clientid.jsonld | grep -i content-type`
+2. That `redirect_uris` matches the deployed URL **exactly** — the
+   provider does a literal string comparison. `login!` builds its
+   redirect from `origin + pathname` for this reason, so a stray query
+   string can't break the match.
+
+Note that changing a document's URL changes the app's identity: users
+would see a fresh consent screen and, on node-solid-server, need to
+trust it again. Worth getting the filename right before publishing.
 
 ## Build tooling
 
