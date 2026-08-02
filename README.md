@@ -66,9 +66,10 @@ Hence `?reset`, handled by `auth/recover-from-url!`, which deletes the
 `localhost:8080` in DevTools does the same thing, if you can get the
 page to sit still long enough.
 
-This is a dynamic-registration problem, so it goes away once dev builds
-use a published client identifier — see [Client
-identity](#client-identity).
+This was a dynamic-registration problem. Dev builds now use a published
+client identifier, which doesn't expire, so it shouldn't recur — but the
+hatch stays, since any wedged session is otherwise unreachable.
+See [Client identity](#client-identity).
 
 ## Release build
 
@@ -90,16 +91,15 @@ One-time setup, in the repo's **Settings → Pages**, set *Source* to
 **GitHub Actions**. Without that the deploy step fails; the workflow
 can't enable Pages itself.
 
-After the first successful deploy, confirm the client identifier
-document is served correctly before relying on it:
+GitHub Pages serves `.jsonld` as `application/ld+json`, so the client
+identifier documents are dereferenceable as-is — verified against the
+live site, and confirmed by solidcommunity.net accepting the published
+identity at login. Worth re-checking if the hosting ever changes, since
+a document served as `text/plain` may be rejected:
 
 ```sh
 curl -sI https://insano10.github.io/solid-social/clientid.jsonld | grep -i content-type
 ```
-
-Then uncomment the `:dev` block in `shadow-cljs.edn` so local
-development uses the published dev identity instead of registering a
-throwaway client each time. See [Client identity](#client-identity).
 
 ## How data is stored
 
@@ -194,10 +194,13 @@ The ID used at build time comes from a `goog-define` in `auth.cljs`, set
 per build in `shadow-cljs.edn`:
 
 - `npm run release` → the published identity.
-- `npm run dev` → **empty, so dynamic registration** — a provider can't
-  fetch a client document from `localhost`, so the dev document only
-  becomes usable once the site is published somewhere. At that point
-  uncomment the `:dev` block in `shadow-cljs.edn`.
+- `npm run dev` → the development identity.
+
+Both documents are fetched from the published site by the *identity
+provider*, never by the browser — which is why even the localhost-only
+client needs a public URL, and why neither works until the site has been
+deployed at least once. Leaving `client-id` empty (the default in
+`auth.cljs`) falls back to dynamic registration.
 
 Two things to verify the first time the site is published, before
 trusting any of this:

@@ -19,12 +19,12 @@
          {solid-social.auth/client-id
           "https://insano10.github.io/solid-social/clientid.jsonld"}}
 
-        ;; Dev builds register dynamically by default, since an identity
-        ;; provider cannot fetch a client document from localhost. Once
-        ;; the site is published, uncomment this to use the separate dev
-        ;; identity (localhost redirect URIs only) and stop hitting
-        ;; expired-registration errors.
-        #_:dev
-        #_{:closure-defines
-           {solid-social.auth/client-id
-            "https://insano10.github.io/solid-social/clientid-dev.jsonld"}}}}}
+        ;; Local development uses a separate published identity whose
+        ;; redirect URIs are localhost only, so the real app's identity
+        ;; never vouches for a loopback redirect. Note the document is
+        ;; fetched by the identity provider, not the browser — hence a
+        ;; public URL for a localhost-only client.
+        :dev
+        {:closure-defines
+         {solid-social.auth/client-id
+          "https://insano10.github.io/solid-social/clientid-dev.jsonld"}}}}}
