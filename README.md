@@ -81,6 +81,26 @@ directory is the deployable site — host it on GitHub Pages, Netlify, or
 any static file server. The app uses no routing, so no rewrite rules are
 needed; the page's own URL is used as the OIDC redirect URL.
 
+`.github/workflows/deploy.yml` does this on every push to `main`: builds
+the release bundle and publishes `public/` to GitHub Pages at
+<https://insano10.github.io/solid-social/>. `public/js/` is gitignored —
+the site is compiled in CI, never committed.
+
+One-time setup, in the repo's **Settings → Pages**, set *Source* to
+**GitHub Actions**. Without that the deploy step fails; the workflow
+can't enable Pages itself.
+
+After the first successful deploy, confirm the client identifier
+document is served correctly before relying on it:
+
+```sh
+curl -sI https://insano10.github.io/solid-social/clientid.jsonld | grep -i content-type
+```
+
+Then uncomment the `:dev` block in `shadow-cljs.edn` so local
+development uses the published dev identity instead of registering a
+throwaway client each time. See [Client identity](#client-identity).
+
 ## How data is stored
 
 Everything lives in the pod under `solid-social/` at the storage root:
