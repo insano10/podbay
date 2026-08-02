@@ -19,13 +19,31 @@
 (defn web-id []
   (.-webId ^js (session-info)))
 
+(goog-define client-id "")
+
+(defn- redirect-url
+  "Where the identity provider sends the browser back to. Deliberately
+   built from origin + path rather than the current href: with a client
+   identifier this has to match an entry in the client document exactly,
+   and a stray query string or fragment would break that match."
+  []
+  (str (.-origin js/location) (.-pathname js/location)))
+
 (defn login!
   "Redirects the browser to the user's Solid identity provider.
-   Control returns to this page afterwards via the OIDC redirect."
+   Control returns to this page afterwards via the OIDC redirect.
+
+   With `client-id` set to the URL of a client identifier document, the
+   app has a stable published identity. Left empty (the default), the
+   library registers a throwaway client with the provider on every
+   login instead — fine for local work, but those registrations expire
+   and a stale one locks you out (see recover-from-url! below)."
   [oidc-issuer]
-  (authn/login #js {:oidcIssuer oidc-issuer
-                    :redirectUrl (.. js/window -location -href)
-                    :clientName "Solid Social"}))
+  (authn/login
+   (clj->js (cond-> {:oidcIssuer oidc-issuer
+                     :redirectUrl (redirect-url)
+                     :clientName "Solid Social"}
+              (seq client-id) (assoc :clientId client-id)))))
 
 (defn logout! []
   (authn/logout))

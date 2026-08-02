@@ -21,4 +21,5 @@ public/js/
 .clj-kondo/imports/
 
 .idea/
+*.iml
 .lsp/
