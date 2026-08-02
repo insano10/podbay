@@ -12,3 +12,14 @@ pom.xml.asc
 .lein-failures
 .nrepl-port
 .cpcache/
+
+# npm / shadow-cljs
+node_modules/
+.shadow-cljs/
+public/js/
+.clj-kondo/.cache/
+.clj-kondo/imports/
+
+.idea/
+*.iml
+.lsp/

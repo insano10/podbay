@@ -1,0 +1,30 @@
+;; Source paths and dependencies live in deps.edn — see :deps below.
+{:deps true
+
+ ;; serves public/ during development
+ :dev-http {8080 "public"}
+
+ :builds
+ {:app {:target :browser
+        :output-dir "public/js"
+        :asset-path "js"
+        :modules {:main {:init-fn solid-social.core/init}}
+
+        ;; The published app identifies itself with the client identifier
+        ;; document in public/, so it presents a stable identity instead
+        ;; of registering a throwaway client on every login. See "Client
+        ;; identity" in the README.
+        :release
+        {:closure-defines
+         {solid-social.auth/client-id
+          "https://insano10.github.io/solid-social/clientid.jsonld"}}
+
+        ;; Dev builds register dynamically by default, since an identity
+        ;; provider cannot fetch a client document from localhost. Once
+        ;; the site is published, uncomment this to use the separate dev
+        ;; identity (localhost redirect URIs only) and stop hitting
+        ;; expired-registration errors.
+        #_:dev
+        #_{:closure-defines
+           {solid-social.auth/client-id
+            "https://insano10.github.io/solid-social/clientid-dev.jsonld"}}}}}
