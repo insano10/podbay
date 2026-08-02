@@ -16,6 +16,9 @@
 (def ^:private foaf "http://xmlns.com/foaf/0.1/")
 (def ^:private vcard "http://www.w3.org/2006/vcard/ns#")
 
+;; where a WebID profile points at the pod's storage root
+(def pim-storage "http://www.w3.org/ns/pim/space#storage")
+
 (def foaf-name (str foaf "name"))
 (def foaf-img (str foaf "img"))
 (def vcard-fn (str vcard "fn"))

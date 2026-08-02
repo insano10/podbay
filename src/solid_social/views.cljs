@@ -138,26 +138,54 @@
    request, and 401 on anything that isn't public), then `render` is
    called with a local blob: URL to point the element at.
 
-   The fetch starts once, when this component mounts, and the blob: URL
-   is released again when it unmounts."
+   Fetching is deferred until the placeholder nears the viewport. That
+   deliberately reproduces what the browser used to do for us via
+   loading=\"lazy\": authenticated media can't be a plain src, so nothing
+   else will hold these requests back, and a feed full of photos would
+   otherwise download all of them at once, ahead of the posts.
+
+   The blob: URL is released when the component unmounts."
   [url render]
-  (r/with-let [media (r/atom {:status :loading})
-               _ (-> (pod/media-url+ url)
-                     (p/then (fn [blob-url]
-                               ;; unmounted mid-flight: nothing will ever
-                               ;; release this, so do it now
-                               (if (= :released (:status @media))
-                                 (pod/release-media-url! blob-url)
-                                 (reset! media {:status :ready :src blob-url}))))
-                     (p/catch (fn [_] (reset! media {:status :error}))))]
+  (r/with-let [media (r/atom {:status :idle})
+               observer (atom nil)
+               unwatch! (fn []
+                          (when-let [^js o @observer]
+                            (.disconnect o)
+                            (reset! observer nil)))
+               fetch! (fn []
+                        (unwatch!)
+                        (swap! media assoc :status :loading)
+                        (-> (pod/media-url+ url)
+                            (p/then (fn [blob-url]
+                                      ;; unmounted mid-flight: nothing will
+                                      ;; ever release this, so do it now
+                                      (if (= :released (:status @media))
+                                        (pod/release-media-url! blob-url)
+                                        (reset! media {:status :ready :src blob-url}))))
+                            (p/catch (fn [_] (reset! media {:status :error})))))
+               ;; ref callback: React hands us the placeholder node on
+               ;; mount and nil on unmount
+               watch! (fn [el]
+                        (if (nil? el)
+                          (unwatch!)
+                          (let [o (js/IntersectionObserver.
+                                   (fn [entries]
+                                     (when (some #(.-isIntersecting ^js %)
+                                                 (array-seq entries))
+                                       (fetch!)))
+                                   ;; start slightly before it scrolls in
+                                   #js {:rootMargin "400px"})]
+                            (reset! observer o)
+                            (.observe o el))))]
     (let [{:keys [status src]} @media]
       (case status
-        :loading [:div.attachment.attachment-loading]
+        (:idle :loading) [:div.attachment.attachment-loading {:ref watch!}]
         :ready (render src)
         ;; couldn't read it — most likely no access; offer the raw link
         :error [:a.attachment-link {:href url :target "_blank" :rel "noopener"} url]
         nil))
     (finally
+      (unwatch!)
       (when-let [src (:src @media)]
         (pod/release-media-url! src))
       (reset! media {:status :released}))))

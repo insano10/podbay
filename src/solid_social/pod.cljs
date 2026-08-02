@@ -24,31 +24,42 @@
 ;; ---------------------------------------------------------------------------
 ;; Discovery
 
-;; Resolving a storage root means fetching the WebID profile document, and
-;; we need the root of every author several times per refresh (posts,
-;; contacts, media). Cache the promise, not just the result, so concurrent
-;; callers share one in-flight request instead of racing to repeat it.
-(defonce ^:private pod-root-cache (atom {}))
+;; A WebID profile is needed twice over — once for the storage root, once
+;; for the display name and avatar — and the storage root is needed again
+;; for every container we touch. On a slow pod that document is the single
+;; most expensive thing we fetch, so fetch it once per WebID and share the
+;; promise: concurrent callers then join one in-flight request instead of
+;; racing to repeat it.
+(defonce ^:private profile-cache (atom {}))
+
+(defn- profile+
+  "The WebID profile document as a dataset, or nil if it can't be read."
+  [webid]
+  (or (get @profile-cache webid)
+      (let [ds+ (-> (sc/getSolidDataset webid (opts))
+                    (p/catch (fn [_] nil)))]
+        (swap! profile-cache assoc webid ds+)
+        ds+)))
+
+(defn- profile-thing+ [webid]
+  (p/let [ds (profile+ webid)]
+    (when ds
+      (sc/getThing ds webid))))
 
 (defn pod-root+
   "Resolve the storage root for a WebID via pim:storage in the profile,
    falling back to the WebID's origin (correct for most pod providers)."
   [webid]
-  (or (get @pod-root-cache webid)
-      (let [root+ (-> (p/let [urls (sc/getPodUrlAll webid (opts))]
-                        (first urls))
-                      (p/catch (fn [_] nil))
-                      (p/then (fn [root]
-                                (or root
-                                    (str (.-origin (js/URL. webid)) "/")))))]
-        (swap! pod-root-cache assoc webid root+)
-        root+)))
+  (p/let [thing (profile-thing+ webid)
+          storage (when thing (sc/getUrl thing v/pim-storage))]
+    (or storage
+        (str (.-origin (js/URL. webid)) "/"))))
 
 (defn forget-caches!
   "Drop cached pod lookups — call on logout, since the next session may
    be a different person."
   []
-  (reset! pod-root-cache {}))
+  (reset! profile-cache {}))
 
 (defn- posts-container+ [webid]
   (p/let [root (pod-root+ webid)]
@@ -65,10 +76,10 @@
 
 (defn load-profile+
   "Fetch display name and avatar from a WebID profile document.
-   Resolves to {:name ... :avatar ...} (both possibly nil)."
+   Resolves to {:name ... :avatar ...} (both possibly nil). Shares the
+   profile fetch with pod-root+ rather than requesting it a second time."
   [webid]
-  (-> (p/let [ds (sc/getSolidDataset webid (opts))
-              thing (sc/getThing ds webid)]
+  (-> (p/let [thing (profile-thing+ webid)]
         (when thing
           {:name (or (sc/getStringNoLocale thing v/foaf-name)
                      (sc/getStringNoLocale thing v/vcard-fn))

@@ -46,23 +46,30 @@
 ;; its results over the newer one.
 (defonce ^:private feed-run (atom 0))
 
+(defn- fetch-authors!
+  "Load each author's posts, merging every one into the feed as it
+   arrives. Results from a superseded refresh are dropped."
+  [authors]
+  (let [run @feed-run
+        current? #(= run @feed-run)]
+    (load-profiles! authors)
+    (p/all (mapv (fn [author]
+                   (p/then (pod/load-posts+ author)
+                           #(when (current?) (merge-author-posts! author %))))
+                 authors))))
+
 (defn refresh-feed!
   "Reload posts from the user's own pod and every contact's pod,
    merged and sorted newest-first."
   []
   (let [{:keys [webid contacts]} @db
-        authors (into [webid] contacts)
-        run (swap! feed-run inc)
-        current? #(= run @feed-run)]
+        authors (into [webid] contacts)]
+    (swap! feed-run inc)
     (swap! db assoc :loading-feed? true :error nil)
     ;; drop anyone no longer followed before fetching
     (rebuild-feed! (select-keys (:posts-by-author @db) authors))
-    (load-profiles! authors)
-    (-> (p/all (mapv (fn [author]
-                       (p/then (pod/load-posts+ author)
-                               #(when (current?) (merge-author-posts! author %))))
-                     authors))
-        (p/then #(when (current?) (swap! db assoc :loading-feed? false)))
+    (-> (fetch-authors! authors)
+        (p/then #(swap! db assoc :loading-feed? false))
         (p/catch #(set-error! (str "Couldn't load feed: " (.-message %)))))))
 
 (defn submit-post!
@@ -111,15 +118,24 @@
   []
   (auth/recover-from-url!)
   (-> (auth/handle-redirect!)
-      (p/then (fn [_]
-                (swap! db assoc :checking-session? false)
-                (when (auth/logged-in?)
-                  (let [webid (auth/web-id)]
-                    (swap! db assoc :webid webid)
-                    (p/then (pod/load-contacts+ webid)
-                            (fn [contacts]
-                              (swap! db assoc :contacts contacts)
-                              (refresh-feed!)))))))
+      (p/then
+       (fn [_]
+         (swap! db assoc :checking-session? false)
+         (when (auth/logged-in?)
+           (let [webid (auth/web-id)]
+             (swap! db assoc :webid webid :loading-feed? true :error nil)
+             (swap! feed-run inc)
+             ;; Your own posts and your contact list are independent, and
+             ;; on a slow pod every round trip is seconds — so start both
+             ;; at once rather than making the feed wait on the contacts
+             ;; fetch before it asks for anything.
+             (-> (p/all [(fetch-authors! [webid])
+                         (p/let [contacts (pod/load-contacts+ webid)]
+                           (swap! db assoc :contacts contacts)
+                           (fetch-authors! contacts))])
+                 (p/then (fn [_] (swap! db assoc :loading-feed? false)))
+                 (p/catch #(set-error! (str "Couldn't load feed: "
+                                            (.-message %)))))))))
       (p/catch (fn [e]
                  (swap! db assoc :checking-session? false)
                  (set-error! (str "Session error: " (.-message e)))))))

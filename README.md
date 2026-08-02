@@ -136,9 +136,26 @@ Each person's pod answers at its own pace, so posts are merged into the
 feed as they arrive rather than waiting for the slowest contact —
 `state/db` holds `:posts-by-author` and `:posts` is the flattened sort
 of it. A contact whose pod is unreachable contributes `[]` instead of
-breaking the feed. Storage-root lookups cost a profile fetch and are
-needed repeatedly, so `pod.cljs` caches them per WebID (cleared on
-logout).
+breaking the feed.
+
+### Round trips
+
+Pods can be slow: requests to solidcommunity.net have been observed
+taking around ten seconds, essentially all of it waiting on the server
+rather than queued in the browser. Nothing client-side fixes per-request
+latency, so what the code optimises is **the number of requests on the
+critical path**:
+
+- A WebID profile is fetched **once** per person, with the promise
+  cached and shared (`pod/profile+`, cleared on logout). It's needed
+  both for the storage root and for the display name and avatar, and
+  those used to fetch it separately. That's also why `pod-root+` reads
+  `pim:storage` itself instead of calling solid-client's
+  `getPodUrlAll`, which would fetch the profile again internally.
+- On startup your own posts and your contact list are requested **in
+  parallel**. They're independent, but serialising them meant the feed
+  issued no request at all until the contacts round trip had finished.
+- Media is fetched only as it nears the viewport — see below.
 
 ### Authenticated media
 
@@ -150,6 +167,12 @@ bytes with the session's `fetch` and wraps them in a local `blob:` URL,
 and the `authed-media` component in `views.cljs` renders from that,
 releasing the URL when it unmounts. Media the viewer genuinely can't
 read degrades to a plain link rather than a broken image.
+
+Because nothing else can defer these requests — an authenticated fetch
+can't use `loading="lazy"` — `authed-media` defers them itself, starting
+the fetch only when an `IntersectionObserver` says the placeholder is
+near the viewport. Without that, a feed full of photos downloads every
+attachment at once, competing with the post fetches.
 
 Avatars are still plain `src` attributes, on the assumption that profile
 photos are public. If you hit a 401 on one, route it through
@@ -201,6 +224,16 @@ provider*, never by the browser — which is why even the localhost-only
 client needs a public URL, and why neither works until the site has been
 deployed at least once. Leaving `client-id` empty (the default in
 `auth.cljs`) falls back to dynamic registration.
+
+A published identity also fixes session persistence, which is the same
+root cause wearing a different hat. Dynamic registrations come back from
+the provider with a `clientExpiresAt`, and the library's
+`validateCurrentSession` refuses to restore a session whose registration
+has expired — so you land on the login screen after every refresh. A
+client identifier document has no expiry, so restore keeps working.
+
+Note that `:closure-defines` is build configuration: changing which
+identity a build uses needs a `npm run dev` restart, not just a save.
 
 Two things to verify the first time the site is published, before
 trusting any of this:
