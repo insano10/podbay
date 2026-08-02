@@ -11,7 +11,8 @@
   (r/atom {:checking-session? true
            :webid nil
            :contacts []
-           :posts []
+           :posts []             ; every author's posts, newest first
+           :posts-by-author {}   ; webid -> that author's posts
            :profiles {}          ; webid -> {:name :avatar}
            :loading-feed? false
            :posting? false
@@ -26,24 +27,42 @@
     (p/then (pod/load-profile+ webid)
             #(swap! db assoc-in [:profiles webid] %))))
 
+(defn- published-at [post]
+  (if-let [d (:published post)] (.getTime d) 0))
+
+(defn- rebuild-feed! [by-author]
+  (swap! db assoc
+         :posts-by-author by-author
+         :posts (vec (sort-by published-at > (mapcat val by-author)))))
+
+(defn- merge-author-posts!
+  "Replace one author's posts and rebuild the merged feed. Each pod
+   answers at its own pace, so results are shown as they arrive rather
+   than making the whole feed wait on the slowest contact."
+  [author posts]
+  (rebuild-feed! (assoc (:posts-by-author @db) author posts)))
+
+;; A refresh that is still in flight when another starts must not write
+;; its results over the newer one.
+(defonce ^:private feed-run (atom 0))
+
 (defn refresh-feed!
   "Reload posts from the user's own pod and every contact's pod,
    merged and sorted newest-first."
   []
   (let [{:keys [webid contacts]} @db
-        authors (into [webid] contacts)]
+        authors (into [webid] contacts)
+        run (swap! feed-run inc)
+        current? #(= run @feed-run)]
     (swap! db assoc :loading-feed? true :error nil)
+    ;; drop anyone no longer followed before fetching
+    (rebuild-feed! (select-keys (:posts-by-author @db) authors))
     (load-profiles! authors)
-    (-> (p/all (map pod/load-posts+ authors))
-        (p/then (fn [post-lists]
-                  (swap! db assoc
-                         :loading-feed? false
-                         :posts (->> (apply concat post-lists)
-                                     (sort-by #(if-let [d (:published %)]
-                                                 (.getTime d)
-                                                 0)
-                                              >)
-                                     vec))))
+    (-> (p/all (mapv (fn [author]
+                       (p/then (pod/load-posts+ author)
+                               #(when (current?) (merge-author-posts! author %))))
+                     authors))
+        (p/then #(when (current?) (swap! db assoc :loading-feed? false)))
         (p/catch #(set-error! (str "Couldn't load feed: " (.-message %)))))))
 
 (defn submit-post!
@@ -81,12 +100,16 @@
 (defn logout! []
   (-> (auth/logout!)
       (p/then (fn [_]
-                (swap! db assoc :webid nil :posts [] :contacts [] :profiles {})))))
+                (pod/forget-caches!)
+                (swap! db assoc
+                       :webid nil :contacts [] :profiles {}
+                       :posts [] :posts-by-author {})))))
 
 (defn init!
   "Run once on page load: finish any pending OIDC redirect, restore the
    session if there is one, then load contacts and the feed."
   []
+  (auth/recover-from-url!)
   (-> (auth/handle-redirect!)
       (p/then (fn [_]
                 (swap! db assoc :checking-session? false)

@@ -2,7 +2,9 @@
   "Reagent components. Everything renders from the state/db atom;
    user actions call functions in solid-social.state."
   (:require [clojure.string :as str]
+            [promesa.core :as p]
             [reagent.core :as r]
+            [solid-social.pod :as pod]
             [solid-social.state :as state]))
 
 ;; ---------------------------------------------------------------------------
@@ -130,12 +132,47 @@
 ;; ---------------------------------------------------------------------------
 ;; Feed
 
+(defn- authed-media
+  "Renders one piece of pod media. The bytes are fetched with the
+   session's credentials (a bare src= would be an unauthenticated
+   request, and 401 on anything that isn't public), then `render` is
+   called with a local blob: URL to point the element at.
+
+   The fetch starts once, when this component mounts, and the blob: URL
+   is released again when it unmounts."
+  [url render]
+  (r/with-let [media (r/atom {:status :loading})
+               _ (-> (pod/media-url+ url)
+                     (p/then (fn [blob-url]
+                               ;; unmounted mid-flight: nothing will ever
+                               ;; release this, so do it now
+                               (if (= :released (:status @media))
+                                 (pod/release-media-url! blob-url)
+                                 (reset! media {:status :ready :src blob-url}))))
+                     (p/catch (fn [_] (reset! media {:status :error}))))]
+    (let [{:keys [status src]} @media]
+      (case status
+        :loading [:div.attachment.attachment-loading]
+        :ready (render src)
+        ;; couldn't read it — most likely no access; offer the raw link
+        :error [:a.attachment-link {:href url :target "_blank" :rel "noopener"} url]
+        nil))
+    (finally
+      (when-let [src (:src @media)]
+        (pod/release-media-url! src))
+      (reset! media {:status :released}))))
+
 (defn- attachment-view [url]
   (let [ext (url-ext url)]
     (cond
-      (image-exts ext) [:img.attachment {:src url :alt "" :loading "lazy"}]
-      (video-exts ext) [:video.attachment {:src url :controls true :preload "metadata"}]
-      :else [:a.attachment-link {:href url :target "_blank" :rel "noopener"} url])))
+      (image-exts ext)
+      [authed-media url (fn [src] [:img.attachment {:src src :alt ""}])]
+
+      (video-exts ext)
+      [authed-media url (fn [src] [:video.attachment {:src src :controls true}])]
+
+      :else
+      [:a.attachment-link {:href url :target "_blank" :rel "noopener"} url])))
 
 (defn- post-card [{:keys [id author content published attachments]}]
   (let [avatar (get-in @state/db [:profiles author :avatar])]
