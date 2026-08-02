@@ -274,6 +274,14 @@ img.attachment, video.attachment {
   border: 1px solid var(--border);
 }
 
+/* placeholder while media is being fetched with the session's credentials */
+.attachment-loading {
+  height: 10rem;
+  border-radius: 0.5rem;
+  border: 1px solid var(--border);
+  background: var(--bg);
+}
+
 .attachment-link { word-break: break-all; font-size: 0.85rem; }
 
 .post footer { margin-top: 0.5rem; }

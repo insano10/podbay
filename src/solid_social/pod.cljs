@@ -24,16 +24,31 @@
 ;; ---------------------------------------------------------------------------
 ;; Discovery
 
+;; Resolving a storage root means fetching the WebID profile document, and
+;; we need the root of every author several times per refresh (posts,
+;; contacts, media). Cache the promise, not just the result, so concurrent
+;; callers share one in-flight request instead of racing to repeat it.
+(defonce ^:private pod-root-cache (atom {}))
+
 (defn pod-root+
   "Resolve the storage root for a WebID via pim:storage in the profile,
    falling back to the WebID's origin (correct for most pod providers)."
   [webid]
-  (-> (p/let [urls (sc/getPodUrlAll webid (opts))]
-        (first urls))
-      (p/catch (fn [_] nil))
-      (p/then (fn [root]
-                (or root
-                    (str (.-origin (js/URL. webid)) "/"))))))
+  (or (get @pod-root-cache webid)
+      (let [root+ (-> (p/let [urls (sc/getPodUrlAll webid (opts))]
+                        (first urls))
+                      (p/catch (fn [_] nil))
+                      (p/then (fn [root]
+                                (or root
+                                    (str (.-origin (js/URL. webid)) "/")))))]
+        (swap! pod-root-cache assoc webid root+)
+        root+)))
+
+(defn forget-caches!
+  "Drop cached pod lookups — call on logout, since the next session may
+   be a different person."
+  []
+  (reset! pod-root-cache {}))
 
 (defn- posts-container+ [webid]
   (p/let [root (pod-root+ webid)]
@@ -90,6 +105,27 @@
              (keep thing->post)
              vec))
       (p/catch (fn [_] []))))
+
+;; ---------------------------------------------------------------------------
+;; Media
+;;
+;; Pod resources are private by default, and the browser won't attach the
+;; session's tokens to a plain <img src="https://pod/…"> — that request goes
+;; out unauthenticated and comes back 401. So media has to be fetched here,
+;; with the session's fetch, and handed to the element as a blob: URL.
+
+(defn media-url+
+  "Fetch a media resource with the session's credentials and wrap the
+   bytes in a local blob: URL suitable for an <img>/<video> src.
+   The caller owns the URL and must release-media-url! it when done."
+  [url]
+  (p/let [blob (sc/getFile url (opts))]
+    (js/URL.createObjectURL blob)))
+
+(defn release-media-url!
+  "Free a blob: URL returned by media-url+."
+  [blob-url]
+  (js/URL.revokeObjectURL blob-url))
 
 (defn- upload-file+ [container ^js file]
   (p/let [saved (sc/saveFileInContainer container file

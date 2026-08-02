@@ -17,10 +17,10 @@ Built with [ClojureScript](https://clojurescript.org/),
 ## Prerequisites
 
 - Node.js (20+) and npm
-- A JVM (Java **21+**) — shadow-cljs 3.x runs on it and requires Java 21.
-  If you're stuck on an older JVM, pin `"shadow-cljs": "^2.28.20"` in
-  `package.json` instead; it works with Java 11+ (its `npm audit` noise
-  is dev-time only and never reaches the browser bundle).
+- A JVM (Java **21+**) — shadow-cljs 3.x requires it, and 3.x is not
+  optional here (see [Build tooling](#build-tooling) below).
+- The [Clojure CLI](https://clojure.org/guides/install_clojure) — the
+  JVM classpath comes from `deps.edn`.
 
 ## Development
 
@@ -38,6 +38,33 @@ to the nREPL port shadow-cljs prints on startup).
 To try it out you need a Solid pod — free accounts at
 [solidcommunity.net](https://solidcommunity.net) or
 [Inrupt PodSpaces](https://start.inrupt.com/), among others.
+
+### If the app redirects to your pod provider and never comes back
+
+Load **<http://localhost:8080/?reset>**. That clears the stored session
+before anything else runs, and you get a clean login screen.
+
+Sessions survive a page reload because `handle-redirect!` passes
+`restorePreviousSession: true`. That restore is not a background
+request: `solid-client-authn-browser` navigates the **whole page** to
+the identity provider with `prompt=none` and relies on being redirected
+straight back. (While that's in flight, `handleIncomingRedirect` returns
+a promise that deliberately never resolves, since the page is about to
+be replaced — so nothing downstream of it can run, and startup costs a
+full redirect round trip.)
+
+If the provider rejects that request the browser is simply left on the
+provider's error page. The usual cause is a **dynamic client
+registration the provider has since expired**: node-solid-server answers
+with a bare `400` instead of redirecting back with an error. The stored
+session ID still looks valid locally, so every reload re-attempts the
+same doomed request — you can't reach the app, and you can't reach the
+Log out button that would have cleared it.
+
+Hence `?reset`, handled by `auth/recover-from-url!`, which deletes the
+`solidClientAuthn:` keys from `localStorage`. Clearing site data for
+`localhost:8080` in DevTools does the same thing, if you can get the
+page to sit still long enough.
 
 ## Release build
 
@@ -81,6 +108,69 @@ resolves the pod's storage root (via `pim:storage` in the profile),
 lists `solid-social/posts/`, fetches each post, and merges everything
 sorted by `as:published`.
 
+Each person's pod answers at its own pace, so posts are merged into the
+feed as they arrive rather than waiting for the slowest contact —
+`state/db` holds `:posts-by-author` and `:posts` is the flattened sort
+of it. A contact whose pod is unreachable contributes `[]` instead of
+breaking the feed. Storage-root lookups cost a profile fetch and are
+needed repeatedly, so `pod.cljs` caches them per WebID (cleared on
+logout).
+
+### Authenticated media
+
+Pod resources are private by default, and the browser won't attach the
+session's tokens to a plain `<img src="https://…pod/media/photo.jpg">` —
+that request goes out anonymous and comes back **401**. So attachments
+aren't pointed at their pod URL directly. `pod/media-url+` fetches the
+bytes with the session's `fetch` and wraps them in a local `blob:` URL,
+and the `authed-media` component in `views.cljs` renders from that,
+releasing the URL when it unmounts. Media the viewer genuinely can't
+read degrades to a plain link rather than a broken image.
+
+Avatars are still plain `src` attributes, on the assumption that profile
+photos are public. If you hit a 401 on one, route it through
+`authed-media` too.
+
+## Build tooling
+
+`shadow-cljs.edn` sets `:deps true`, so the JVM classpath — **including
+which shadow-cljs compiler actually runs** — comes from `deps.edn`. The
+npm `shadow-cljs` package is only the launcher. Keep the two versions in
+step; if they disagree, `deps.edn` wins and the npm version is a red
+herring when debugging.
+
+The version floor is not arbitrary. shadow-cljs runs every npm
+dependency through the Google Closure compiler, which lags years behind
+modern JavaScript syntax, and this project's dependency tree pushes on
+that in two places:
+
+- `jose@5` (pulled in by `@inrupt/solid-client-authn-browser` 2.x) uses
+  `export * as ns from '…'`, which **no** Closure release parses.
+  Upgrading shadow-cljs cannot fix it; the fix was moving to
+  authn-browser **v5**, which pulls `jose@6`.
+- `jose@6` uses private class fields (`#parent;`). Closure as shipped in
+  shadow-cljs **2.x** rejects these (`'}' expected`); the one in **3.x**
+  parses them fine. Hence shadow-cljs ≥ 3, hence Java 21+.
+
+`@inrupt/solid-client` v3 and authn-browser v5 also clear all `npm
+audit` findings and deprecation warnings that the older majors carried.
+`package-lock.json` is committed.
+
+If a `Failed to inspect file … Parse error` ever appears again, it is
+Closure choking on modern syntax in some npm dependency — identify the
+syntax, then either upgrade that dependency to a build Closure can read
+or, as a last resort, point `:js-options {:resolve …}` at one.
+
+### IntelliJ / Cursive
+
+`(:require ["@inrupt/solid-client" :as sc])` is a *string require* of an
+npm module. Cursive resolves aliases against Clojure namespaces on the
+JVM classpath, and npm packages are neither — so it flags `sc`, `authn`
+and every use of them as unresolved. It's an IDE analysis gap only;
+shadow-cljs resolves string requires itself at build time. Suppress the
+inspection in `pod.cljs`/`auth.cljs` (the only two namespaces affected)
+or ignore it.
+
 ## Code layout
 
 | Namespace             | Role                                                       |
@@ -102,13 +192,11 @@ above it works with plain Clojure maps.
   posts you currently need to make `solid-social/` readable (by them, or
   publicly) via your pod provider's UI. Managing ACLs from the app is
   the natural next feature.
-- **Media in `<img>`/`<video>` tags is fetched without authentication**,
-  so attachments only render if they're readable without a login. Fixing
-  this means fetching media with the authenticated session and using
-  object URLs.
-- **No pagination.** Every post from every contact is loaded on refresh.
-  Fine for personal-network scale; container-level date filtering would
-  be needed beyond that.
+- **No pagination.** Every post from every contact is loaded on refresh,
+  and since each post is its own resource, that's one request per post
+  (they run in parallel, but the round trips add up). Fine for
+  personal-network scale; beyond that you'd want container-level date
+  filtering or a summary index resource.
 - **Posts container discovery is by convention** (`solid-social/posts/`
   under the storage root). A more robust approach is registering the
   container in each user's [Type Index](https://solid.github.io/type-indexes/).
