@@ -1,0 +1,80 @@
+name: Deploy to GitHub Pages
+
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+# The Pages deploy authenticates with a short-lived OIDC token rather
+# than a stored secret, which is what id-token: write is for.
+permissions:
+  contents: read
+  pages: write
+  id-token: write
+
+# Queue deploys rather than cancelling them: a cancelled publish could
+# leave the site half-updated, and the client identifier documents are
+# served from it.
+concurrency:
+  group: pages
+  cancel-in-progress: false
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: npm
+
+      # shadow-cljs 3.x runs on the JVM and requires Java 21+
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: 21
+
+      # shadow-cljs.edn sets :deps true, so the compiler itself comes off
+      # the deps.edn classpath and the Clojure CLI has to be present.
+      # Installed from the official script rather than a third-party
+      # action, to keep the list of things trusted with this workflow short.
+      - name: Install Clojure CLI
+        run: |
+          curl -fsSL -o linux-install.sh \
+            https://github.com/clojure/brew-install/releases/latest/download/linux-install.sh
+          chmod +x linux-install.sh
+          sudo ./linux-install.sh
+          rm linux-install.sh
+
+      - name: Cache Maven dependencies
+        uses: actions/cache@v4
+        with:
+          path: ~/.m2/repository
+          key: ${{ runner.os }}-m2-${{ hashFiles('deps.edn') }}
+          restore-keys: ${{ runner.os }}-m2-
+
+      - run: npm ci
+
+      # Builds into public/js, which is gitignored — the deployed site is
+      # compiled here, never committed. This is also the build that stamps
+      # in the published client ID (see :release in shadow-cljs.edn).
+      - name: Build release bundle
+        run: npm run release
+
+      # public/ is the whole static site: index.html, css, the compiled
+      # js, and both client identifier documents.
+      - uses: actions/upload-pages-artifact@v3
+        with:
+          path: public
+
+  deploy:
+    needs: build
+    runs-on: ubuntu-latest
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+    steps:
+      - id: deployment
+        uses: actions/deploy-pages@v4
