@@ -3,12 +3,71 @@
    never sees credentials, it just gets a session whose `fetch` attaches
    the right tokens to requests against pods."
   (:require ["@inrupt/solid-client-authn-browser" :as authn]
-            [clojure.string :as str]))
+            [clojure.string :as str]
+            [promesa.core :as p]))
 
-(def auth-fetch
-  "A fetch function bound to the current session. Pass this to
-   @inrupt/solid-client calls so requests are authenticated."
-  authn/fetch)
+;; ---------------------------------------------------------------------------
+;; Talking to pods
+;;
+;; Pod servers are not always reliable. solidcommunity.net in particular
+;; intermittently answers 502 through its CDN, including on CORS
+;; preflights — and a failed preflight surfaces in the browser as a bare
+;; "TypeError: Failed to fetch" plus a console message blaming CORS,
+;; which looks like a configuration error rather than the blip it is.
+;; Retrying absorbs those, and is very likely why the third-party pod
+;; browsers feel flaky too: they report the failure instead of retrying.
+
+(def ^:private retry-statuses
+  "Transient by nature: a gateway that couldn't reach the origin, an
+   overloaded server, or a rate limit. Never 4xx — those are answers."
+  #{429 500 502 503 504})
+
+(def ^:private retry-methods
+  "Only methods that can be repeated without changing the outcome.
+   POST creates something new each time, and PATCH may not survive being
+   applied twice, so neither is retried."
+  #{"GET" "HEAD" "OPTIONS" "PUT" "DELETE"})
+
+(def ^:private max-attempts 3)
+
+(defn- method-of [init]
+  (str/upper-case (or (some-> ^js init .-method) "GET")))
+
+(defn- backoff-ms [attempt]
+  ;; 300ms then 900ms, plus jitter so a fan-out of parallel requests
+  ;; doesn't retry in lockstep and re-create the spike
+  (+ (* 300 (js/Math.pow 3 (dec attempt)))
+     (rand-int 200)))
+
+(defn- pause+ [ms]
+  (js/Promise. (fn [resolve] (js/setTimeout resolve ms))))
+
+(defn auth-fetch
+  "A fetch bound to the current session, retrying transient failures.
+
+   Pass this to @inrupt/solid-client calls so requests are
+   authenticated. Retries are silent and capped; a request that keeps
+   failing still rejects, and any 4xx comes straight back untouched."
+  ([url] (auth-fetch url nil))
+  ([url init]
+   (let [repeatable? (contains? retry-methods (method-of init))]
+     (letfn [(retry-or [n fallback]
+               (if (and repeatable? (< n max-attempts))
+                 (p/let [_ (pause+ (backoff-ms n))]
+                   (attempt (inc n)))
+                 (fallback)))
+             (attempt [n]
+               (-> (authn/fetch url init)
+                   (p/then (fn [^js resp]
+                             (if (contains? retry-statuses (.-status resp))
+                               (retry-or n (constantly resp))
+                               resp)))
+                   (p/catch (fn [err]
+                              ;; a rejection means the request never
+                              ;; reached the server at all — a dropped
+                              ;; connection or a preflight that 502'd
+                              (retry-or n #(p/rejected err))))))]
+       (attempt 1)))))
 
 (defn- session-info []
   (.-info ^js (authn/getDefaultSession)))

@@ -21,6 +21,20 @@
 
 (defn- opts [] #js {:fetch auth/auth-fetch})
 
+;; Pod responses carry no Cache-Control but do carry Last-Modified, so
+;; the browser may reuse one without revalidating. Harmless for a post,
+;; which never changes — but wrong for anything we've just written: a
+;; container listing fetched right after publishing can come back
+;; without the new post in it.
+;;
+;; "no-cache" still caches; it just forces a revalidation on every read,
+;; so an unchanged resource costs a 304 rather than a full body.
+(defn- revalidating-fetch [url init]
+  (auth/auth-fetch url (js/Object.assign #js {} (or init #js {})
+                                         #js {:cache "no-cache"})))
+
+(defn- fresh-opts [] #js {:fetch revalidating-fetch})
+
 ;; ---------------------------------------------------------------------------
 ;; Discovery
 
@@ -147,7 +161,9 @@
    so one bad contact never breaks the whole feed."
   [webid]
   (-> (p/let [container (posts-container+ webid)
-              ds (sc/getSolidDataset container (opts))
+              ;; the listing must be current — a post published a moment
+              ;; ago has to appear; the posts themselves may be cached
+              ds (sc/getSolidDataset container (fresh-opts))
               urls (->> (array-seq (sc/getContainedResourceUrlAll ds))
                         (remove #(str/ends-with? % "/")))
               datasets (p/all (map #(-> (sc/getSolidDataset % (opts))
@@ -261,7 +277,9 @@
   "Resolves to a vector of followed WebIDs (empty if none saved yet)."
   [webid]
   (-> (p/let [url (contacts-url+ webid)
-              ds (sc/getSolidDataset url (opts))
+              ;; rewritten whenever you follow or unfollow someone, so
+              ;; never serve this from cache
+              ds (sc/getSolidDataset url (fresh-opts))
               thing (sc/getThing ds (str url "#me"))]
         (if thing
           (vec (array-seq (sc/getUrlAll thing v/as-following)))
