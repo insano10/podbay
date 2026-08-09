@@ -14,7 +14,8 @@
   (:require ["@inrupt/solid-client" :as sc]
             [clojure.string :as str]
             [promesa.core :as p]
-            [solid-social.auth :as auth]
+            [solid-shared.auth :as auth]
+            [solid-shared.vocab :as sv]
             [solid-social.vocab :as v]))
 
 (def ^:private app-path "solid-social/")
@@ -65,7 +66,7 @@
    falling back to the WebID's origin (correct for most pod providers)."
   [webid]
   (p/let [thing (profile-thing+ webid)
-          storage (when thing (sc/getUrl thing v/pim-storage))]
+          storage (when thing (sc/getUrl thing sv/pim-storage))]
     (or storage
         (str (.-origin (js/URL. webid)) "/"))))
 
@@ -148,7 +149,7 @@
 ;; Posts
 
 (defn- thing->post [thing]
-  (when (some #(= % v/as-Note) (array-seq (sc/getUrlAll thing v/rdf-type)))
+  (when (some #(= % v/as-Note) (array-seq (sc/getUrlAll thing sv/rdf-type)))
     {:id (sc/asUrl thing)
      :author (sc/getUrl thing v/as-attributedTo)
      :content (sc/getStringNoLocale thing v/as-content)
@@ -156,25 +157,34 @@
      :attachments (vec (array-seq (sc/getUrlAll thing v/as-attachment)))}))
 
 (defn load-posts+
-  "Load all posts from one person's pod. Resolves to a vector of post
-   maps; an unreachable or empty pod resolves to [] rather than failing,
-   so one bad contact never breaks the whole feed."
+  "Load all posts from one person's pod, as a vector of post maps.
+
+   Rejects if that pod can't be read. An unreadable pod and an empty one
+   are different facts, and conflating them is how a transient 502 turns
+   into a feed that is simply, silently empty. Keeping one bad contact
+   from breaking the whole feed is the caller's job — see
+   state/fetch-authors! — and it does that without discarding the
+   reason."
   [webid]
-  (-> (p/let [container (posts-container+ webid)
-              ;; the listing must be current — a post published a moment
-              ;; ago has to appear; the posts themselves may be cached
-              ds (sc/getSolidDataset container (fresh-opts))
-              urls (->> (array-seq (sc/getContainedResourceUrlAll ds))
-                        (remove #(str/ends-with? % "/")))
-              datasets (p/all (map #(-> (sc/getSolidDataset % (opts))
-                                        (p/catch (fn [_] nil)))
-                                   urls))]
-        (->> datasets
-             (remove nil?)
-             (mapcat #(array-seq (sc/getThingAll %)))
-             (keep thing->post)
-             vec))
-      (p/catch (fn [_] []))))
+  (p/let [container (posts-container+ webid)
+          ;; the listing must be current — a post published a moment
+          ;; ago has to appear; the posts themselves may be cached
+          ds (sc/getSolidDataset container (fresh-opts))
+          urls (->> (array-seq (sc/getContainedResourceUrlAll ds))
+                    (remove #(str/ends-with? % "/")))
+          ;; one unreadable post shouldn't hide the rest of someone's
+          ;; feed, but it is worth knowing about
+          datasets (p/all (map #(-> (sc/getSolidDataset % (opts))
+                                    (p/catch (fn [e]
+                                               (js/console.warn
+                                                "Skipping unreadable post" % e)
+                                               nil)))
+                               urls))]
+    (->> datasets
+         (remove nil?)
+         (mapcat #(array-seq (sc/getThingAll %)))
+         (keep thing->post)
+         vec)))
 
 ;; ---------------------------------------------------------------------------
 ;; Media
@@ -207,7 +217,7 @@
 (defn- post-thing [webid content published media-urls]
   (reduce (fn [thing url] (sc/addUrl thing v/as-attachment url))
           (-> (sc/createThing #js {:name "post"})
-              (sc/addUrl v/rdf-type v/as-Note)
+              (sc/addUrl sv/rdf-type v/as-Note)
               (sc/addStringNoLocale v/as-content content)
               (sc/addDatetime v/as-published published)
               (sc/addUrl v/as-attributedTo webid))
@@ -228,7 +238,7 @@
               existing (registered-container+ webid v/as-Note)]
         (when (and ds (nil? existing))
           (p/let [reg (-> (sc/createThing #js {:name "solid-social-posts"})
-                          (sc/addUrl v/rdf-type v/solid-TypeRegistration)
+                          (sc/addUrl sv/rdf-type v/solid-TypeRegistration)
                           (sc/addUrl v/solid-forClass v/as-Note)
                           (sc/addUrl v/solid-instanceContainer container))
                   index-url (sc/getSourceUrl ds)

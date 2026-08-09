@@ -5,7 +5,7 @@
             [promesa.core :as p]
             [pod-browser.pod :as pod]
             [reagent.core :as r]
-            [solid-social.auth :as auth]))
+            [solid-shared.auth :as auth]))
 
 (defonce db
   (r/atom {:checking-session? true

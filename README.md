@@ -14,6 +14,29 @@ Built with [ClojureScript](https://clojurescript.org/),
 [shadow-cljs](https://shadow-cljs.github.io/docs/UsersGuide.html) and
 [Reagent](https://reagent-project.github.io/).
 
+## Repository layout
+
+Two independent single-page apps and the code they share. Neither app
+imports the other; the only common ground is `solid-shared.*`.
+
+```
+apps/
+  feed/        Solid Social — the feed        (solid-social.*)
+    src/  public/
+  browser/     Pod Browser — files in a pod   (pod-browser.*)
+    src/  public/
+shared/
+  src/         auth + generic RDF vocabulary  (solid-shared.*)
+site/
+  index.html   landing page linking the two
+```
+
+Each app's `public/` holds its own `index.html`, `css/` and client
+identifier documents; its `js/` is build output and gitignored. All
+three source roots sit on one classpath (`deps.edn`), and shadow-cljs
+compiles only what each build's `:init-fn` reaches — so neither bundle
+contains the other app's code.
+
 ## Prerequisites
 
 - Node.js (20+) and npm
@@ -86,15 +109,20 @@ See [Client identity](#client-identity).
 npm run release
 ```
 
-This produces an optimized bundle in `public/js/`. The whole `public/`
-directory is the deployable site — host it on GitHub Pages, Netlify, or
-any static file server. The app uses no routing, so no rewrite rules are
-needed; the page's own URL is used as the OIDC redirect URL.
+This builds both apps, each into its own `apps/*/public/js/`. Neither
+app uses routing, so no rewrite rules are needed anywhere; each page's
+own URL is its OIDC redirect URL.
 
 `.github/workflows/deploy.yml` does this on every push to `main`: builds
-the release bundle and publishes `public/` to GitHub Pages at
-<https://insano10.github.io/solid-social/>. `public/js/` is gitignored —
-the site is compiled in CI, never committed.
+both release bundles, assembles them into a `dist/` tree, and publishes
+it to GitHub Pages. `apps/*/public/js/` is gitignored — the site is
+compiled in CI, never committed.
+
+```
+https://insano10.github.io/solid-social/          landing page
+                                       /feed/     Solid Social
+                                       /browser/   Pod Browser
+```
 
 One-time setup, in the repo's **Settings → Pages**, set *Source* to
 **GitHub Actions**. Without that the deploy step fails; the workflow
@@ -107,7 +135,7 @@ identity at login. Worth re-checking if the hosting ever changes, since
 a document served as `text/plain` may be rejected:
 
 ```sh
-curl -sI https://insano10.github.io/solid-social/clientid.jsonld | grep -i content-type
+curl -sI https://insano10.github.io/solid-social/feed/clientid.jsonld | grep -i content-type
 ```
 
 ## Pod Browser
@@ -123,15 +151,18 @@ which is why an ESS pod, serving no HTML at all, simply won't open in
 any of them.
 
 ```
-src/pod_browser/
-├── core.cljs     # entry point
-├── state.cljs    # one atom, plus the actions that change it
-├── views.cljs    # Reagent components
-└── pod.cljs      # the only JS-interop namespace here
+apps/browser/
+├── src/pod_browser/
+│   ├── core.cljs     # entry point
+│   ├── state.cljs    # one atom, plus the actions that change it
+│   ├── views.cljs    # Reagent components
+│   └── pod.cljs      # the only JS-interop namespace here
+└── public/           # index.html, css/, client identifier documents
 ```
 
-It shares exactly one namespace with the feed app, `solid-social.auth`,
-rather than reimplementing the OIDC dance. Everything else is its own.
+It shares only the `solid-shared.*` namespaces with the feed app —
+authentication and the generic RDF vocabulary — rather than
+reimplementing the OIDC dance. Everything else is its own.
 
 What it does today:
 
@@ -176,8 +207,7 @@ to raw `localStorage` and would stay shared.
 ### Its own identity
 
 The browser has separate client identifier documents
-(`clientid-browser.jsonld`, `clientid-browser-dev.jsonld`) from the feed
-app's, so the consent screen names what is actually asking for access —
+(`apps/browser/public/clientid*.jsonld`) from the feed app's, so the consent screen names what is actually asking for access —
 "Pod Browser", not "Solid Social". Same split between published and
 localhost redirect URIs, for the same reason. See
 [Client identity](#client-identity).
@@ -388,7 +418,17 @@ The ID used at build time comes from a `goog-define` in `auth.cljs`, set
 per build in `shadow-cljs.edn`:
 
 - `npm run release` → the published identity.
-- `npm run dev` → the development identity.
+- `npm run dev` → **currently dynamic registration.** Both `:dev` blocks
+  in `shadow-cljs.edn` are `#_`-disabled because the documents they name
+  live at the restructured `/feed/` and `/browser/` URLs, which don't
+  exist until a Pages deploy publishes them. Re-enable both after the
+  first successful deploy of that layout.
+
+A `client_id` the provider cannot dereference doesn't degrade — it fails
+the whole login. solidcommunity.net answers **500** at its authorization
+endpoint and leaves the browser on its own error page, which reads like
+a server fault rather than a dangling URL. So a client document must be
+live *before* any build points at it.
 
 Both documents are fetched from the published site by the *identity
 provider*, never by the browser — which is why even the localhost-only
@@ -412,7 +452,7 @@ trusting any of this:
 1. That the document is served as `application/ld+json`. GitHub Pages
    may not map the `.jsonld` extension and could serve it as plain
    text, which some providers reject:
-   `curl -sI https://insano10.github.io/solid-social/clientid.jsonld | grep -i content-type`
+   `curl -sI https://insano10.github.io/solid-social/feed/clientid.jsonld | grep -i content-type`
 2. That `redirect_uris` matches the deployed URL **exactly** — the
    provider does a literal string comparison. `login!` builds its
    redirect from `origin + pathname` for this reason, so a stray query
@@ -470,8 +510,9 @@ or ignore it.
 | `solid-social.views`  | Reagent components (login, composer, contacts, feed)       |
 | `solid-social.state`  | Single app-state atom and the actions that mutate it       |
 | `solid-social.pod`    | All pod I/O — wraps `@inrupt/solid-client`, returns cljs data |
-| `solid-social.auth`   | Solid-OIDC login/logout/session via `solid-client-authn-browser` |
-| `solid-social.vocab`  | RDF vocabulary constants (ActivityStreams, FOAF, vCard)    |
+| `solid-social.vocab`  | ActivityStreams, FOAF, vCard and type-index terms          |
+| `solid-shared.auth`   | Solid-OIDC login/logout/session, and the retrying pod `fetch` |
+| `solid-shared.vocab`  | Generic RDF/LDP terms both apps need                       |
 
 `pod.cljs` is the only namespace that touches JS objects; everything
 above it works with plain Clojure maps.

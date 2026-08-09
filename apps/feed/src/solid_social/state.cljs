@@ -4,7 +4,7 @@
    plain atom keeps the moving parts visible."
   (:require [promesa.core :as p]
             [reagent.core :as r]
-            [solid-social.auth :as auth]
+            [solid-shared.auth :as auth]
             [solid-social.pod :as pod]))
 
 (defonce db
@@ -14,6 +14,7 @@
            :posts []             ; every author's posts, newest first
            :posts-by-author {}   ; webid -> that author's posts
            :profiles {}          ; webid -> {:name :avatar}
+           :unreadable {}        ; webid -> why their pod couldn't be read
            :loading-feed? false
            :posting? false
            :error nil}))
@@ -48,14 +49,27 @@
 
 (defn- fetch-authors!
   "Load each author's posts, merging every one into the feed as it
-   arrives. Results from a superseded refresh are dropped."
+   arrives. Results from a superseded refresh are dropped.
+
+   A pod that can't be read is recorded against that author rather than
+   breaking the whole feed — but it is recorded, not silently treated as
+   an empty pod, so a transient failure can't masquerade as 'no posts'."
   [authors]
   (let [run @feed-run
         current? #(= run @feed-run)]
     (load-profiles! authors)
     (p/all (mapv (fn [author]
-                   (p/then (pod/load-posts+ author)
-                           #(when (current?) (merge-author-posts! author %))))
+                   (-> (pod/load-posts+ author)
+                       (p/then (fn [posts]
+                                 (when (current?)
+                                   (swap! db update :unreadable dissoc author)
+                                   (merge-author-posts! author posts))))
+                       (p/catch (fn [e]
+                                  (js/console.error
+                                   "Couldn't load posts from" author e)
+                                  (when (current?)
+                                    (swap! db assoc-in [:unreadable author]
+                                           (or (some-> ^js e .-message) (str e))))))))
                  authors))))
 
 (defn refresh-feed!
@@ -110,7 +124,7 @@
                 (pod/forget-caches!)
                 (swap! db assoc
                        :webid nil :contacts [] :profiles {}
-                       :posts [] :posts-by-author {})))))
+                       :posts [] :posts-by-author {} :unreadable {})))))
 
 (defn init!
   "Run once on page load: finish any pending OIDC redirect, restore the

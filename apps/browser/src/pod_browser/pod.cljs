@@ -12,7 +12,8 @@
   (:require ["@inrupt/solid-client" :as sc]
             [clojure.string :as str]
             [promesa.core :as p]
-            [solid-social.auth :as auth]))
+            [solid-shared.auth :as auth]
+            [solid-shared.vocab :as v]))
 
 (defn- opts [] #js {:fetch auth/auth-fetch})
 
@@ -35,12 +36,6 @@
 
 (defn- fresh-opts [] #js {:fetch revalidating-fetch})
 
-(def ^:private rdf-type "http://www.w3.org/1999/02/22-rdf-syntax-ns#type")
-(def ^:private pim-storage "http://www.w3.org/ns/pim/space#storage")
-(def ^:private ldp-Container "http://www.w3.org/ns/ldp#Container")
-(def ^:private dc-modified "http://purl.org/dc/terms/modified")
-(def ^:private posix-size "http://www.w3.org/ns/posix/stat#size")
-
 ;; ---------------------------------------------------------------------------
 ;; Where a pod begins
 
@@ -51,7 +46,7 @@
   [webid]
   (-> (p/let [ds (sc/getSolidDataset webid (opts))
               thing (sc/getThing ds webid)
-              urls (when thing (vec (array-seq (sc/getUrlAll thing pim-storage))))]
+              urls (when thing (vec (array-seq (sc/getUrlAll thing v/pim-storage))))]
         (seq urls))
       (p/catch (fn [_] nil))
       (p/then (fn [roots]
@@ -81,14 +76,14 @@
 
 (defn- entry [ds url]
   (let [thing (sc/getThing ds url)
-        types (if thing (vec (array-seq (sc/getUrlAll thing rdf-type))) [])]
+        types (if thing (vec (array-seq (sc/getUrlAll thing v/rdf-type))) [])]
     {:url url
      :name (entry-name url)
      ;; a trailing slash is the reliable signal; the type is a bonus
      :container? (or (str/ends-with? url "/")
-                     (boolean (some #{ldp-Container} types)))
-     :size (when thing (sc/getInteger thing posix-size))
-     :modified (when thing (sc/getDatetime thing dc-modified))
+                     (boolean (some #{v/ldp-Container} types)))
+     :size (when thing (sc/getInteger thing v/posix-size))
+     :modified (when thing (sc/getDatetime thing v/dc-modified))
      :media-type (media-type types)}))
 
 (defn list-container+

@@ -1,4 +1,4 @@
-(ns solid-social.auth
+(ns solid-shared.auth
   "Solid-OIDC authentication. All of this runs in the browser — the app
    never sees credentials, it just gets a session whose `fetch` attaches
    the right tokens to requests against pods."

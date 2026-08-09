@@ -1,4 +1,12 @@
-{:paths ["src"]
+{;; A monorepo of two independent single-page apps plus the code they
+ ;; both need. All three roots sit on one classpath: shadow-cljs only
+ ;; compiles what each build's :init-fn actually reaches, so neither
+ ;; bundle ends up containing the other app's code. The boundary is the
+ ;; namespace prefix — solid-social.*, pod-browser.*, solid-shared.* —
+ ;; rather than the classpath.
+ :paths ["shared/src"
+         "apps/feed/src"
+         "apps/browser/src"]
 
  ;; With :deps true in shadow-cljs.edn, this file controls the JVM
  ;; classpath — including which shadow-cljs compiler version runs (the

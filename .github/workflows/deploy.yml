@@ -57,17 +57,28 @@ jobs:
 
       - run: npm ci
 
-      # Builds into public/js, which is gitignored — the deployed site is
-      # compiled here, never committed. This is also the build that stamps
-      # in the published client ID (see :release in shadow-cljs.edn).
-      - name: Build release bundle
+      # Builds into each app's public/js, which is gitignored — the
+      # deployed site is compiled here, never committed. This is also the
+      # build that stamps in each app's published client ID (see :release
+      # in shadow-cljs.edn).
+      - name: Build release bundles
         run: npm run release
 
-      # public/ is the whole static site: index.html, css, the compiled
-      # js, and both client identifier documents.
+      # Assemble the two apps as siblings under one site, with a landing
+      # page above them. Each app directory carries its own index.html,
+      # css, compiled js and client identifier documents — and those
+      # documents' client_id fields must match where they land here.
+      - name: Assemble site
+        run: |
+          mkdir -p dist
+          cp site/index.html dist/
+          cp -R apps/feed/public    dist/feed
+          cp -R apps/browser/public dist/browser
+          find dist -maxdepth 2 -name index.html -o -name 'clientid*.jsonld' | sort
+
       - uses: actions/upload-pages-artifact@v3
         with:
-          path: public
+          path: dist
 
   deploy:
     needs: build

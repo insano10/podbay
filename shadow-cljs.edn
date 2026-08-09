@@ -7,52 +7,60 @@
  ;; share one session: whichever loads second silently re-authenticates
  ;; using the *other* app's stored redirect URL and lands the user
  ;; there. Separate ports give each its own storage.
- :dev-http {8080 "public"
-            8081 "public/browser"}
+ :dev-http {8080 "apps/feed/public"
+            8081 "apps/browser/public"}
 
  :builds
- {:app {:target :browser
-        :output-dir "public/js"
-        :asset-path "js"
-        :modules {:main {:init-fn solid-social.core/init}}
-
-        ;; The published app identifies itself with the client identifier
-        ;; document in public/, so it presents a stable identity instead
-        ;; of registering a throwaway client on every login. See "Client
-        ;; identity" in the README.
-        :release
-        {:closure-defines
-         {solid-social.auth/client-id
-          "https://insano10.github.io/solid-social/clientid.jsonld"}}
-
-        ;; Local development uses a separate published identity whose
-        ;; redirect URIs are localhost only, so the real app's identity
-        ;; never vouches for a loopback redirect. Note the document is
-        ;; fetched by the identity provider, not the browser — hence a
-        ;; public URL for a localhost-only client.
-        :dev
-        {:closure-defines
-         {solid-social.auth/client-id
-          "https://insano10.github.io/solid-social/clientid-dev.jsonld"}}}
-
-  ;; A separate app, served at /browser/, sharing only solid-social.auth.
-  ;; It gets its own client identity so the consent screen names what is
-  ;; actually asking for access.
-  :pod-browser
+ {;; The social feed, published at /feed/
+  :feed
   {:target :browser
-   :output-dir "public/browser/js"
+   :output-dir "apps/feed/public/js"
+   :asset-path "js"
+   :modules {:main {:init-fn solid-social.core/init}}
+
+   ;; The published app identifies itself with the client identifier
+   ;; document beside it, so it presents a stable identity instead of
+   ;; registering a throwaway client on every login. See "Client
+   ;; identity" in the README.
+   :release
+   {:closure-defines
+    {solid-shared.auth/client-id
+     "https://insano10.github.io/solid-social/feed/clientid.jsonld"}}
+
+   ;; Local development uses a separate published identity whose
+   ;; redirect URIs are localhost only, so the real app's identity never
+   ;; vouches for a loopback redirect. Note the document is fetched by
+   ;; the identity provider, not the browser — hence a public URL for a
+   ;; localhost-only client.
+   ;;
+   ;; DISABLED until a Pages deploy publishes the new /feed/ layout. The
+   ;; document below does not exist yet, and a client_id the provider
+   ;; can't dereference fails the whole login with a 500 — so dev falls
+   ;; back to dynamic registration meanwhile. Re-enable both this and
+   ;; the browser's :dev block after the first successful deploy.
+   #_:dev
+   #_{:closure-defines
+      {solid-shared.auth/client-id
+       "https://insano10.github.io/solid-social/feed/clientid-dev.jsonld"}}}
+
+  ;; The pod file browser, published at /browser/. Shares only
+  ;; solid-shared.*, and has its own client identity so a consent screen
+  ;; names what is actually asking for access.
+  :browser
+  {:target :browser
+   :output-dir "apps/browser/public/js"
    :asset-path "js"
    :modules {:main {:init-fn pod-browser.core/init}}
 
    :release
    {:closure-defines
-    {solid-social.auth/client-id
-     "https://insano10.github.io/solid-social/clientid-browser.jsonld"}}
+    {solid-shared.auth/client-id
+     "https://insano10.github.io/solid-social/browser/clientid.jsonld"}}
 
-   ;; Enable once this repo's Pages deploy has published the document
-   ;; below — until then a dev build can't use it, and dynamic
-   ;; registration (the default) is what works.
+   ;; Enable once a Pages deploy has published the document below —
+   ;; until then a dev build can't use it, and dynamic registration
+   ;; (the default) is what works.
    #_:dev
    #_{:closure-defines
-      {solid-social.auth/client-id
-       "https://insano10.github.io/solid-social/clientid-browser-dev.jsonld"}}}}}
+      {solid-shared.auth/client-id
+       "https://insano10.github.io/solid-social/browser/clientid-dev.jsonld"}}}}}

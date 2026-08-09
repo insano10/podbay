@@ -226,14 +226,30 @@
      [:footer
       [:a.subtle {:href id :target "_blank" :rel "noopener"} "source"]]]))
 
+(defn- unreadable-notice []
+  (let [unreadable (:unreadable @state/db)]
+    (when (seq unreadable)
+      [:div.unreadable
+       [:p "Couldn't read " (if (= 1 (count unreadable)) "a pod" "some pods") ":"]
+       [:ul
+        (for [[webid reason] (sort unreadable)]
+          ^{:key webid}
+          [:li [:span.who {:title webid} (display-name webid)] " — " reason])]
+       [:p.hint
+        "Their posts are missing from the feed rather than absent — try
+         refreshing."]])))
+
 (defn feed []
-  (let [{:keys [posts loading-feed?]} @state/db]
+  (let [{:keys [posts loading-feed? unreadable]} @state/db]
     [:div.feed
+     [unreadable-notice]
      (cond
        (and loading-feed? (empty? posts))
        [:p.hint "Loading feed…"]
 
-       (empty? posts)
+       ;; only claim emptiness when nothing failed — otherwise "no posts"
+       ;; would be a guess dressed up as a fact
+       (and (empty? posts) (empty? unreadable))
        [:p.hint "No posts yet. Write one above, or follow someone."]
 
        :else

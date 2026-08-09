@@ -16,12 +16,15 @@ pom.xml.asc
 # npm / shadow-cljs
 node_modules/
 .shadow-cljs/
-# compiled output only — the index.html and css/ beside these are source
-public/js/
-public/browser/js/
+# compiled output only — the index.html, css/ and clientid*.jsonld
+# beside these are source and must ship
+apps/*/public/js/
+dist/
 .clj-kondo/.cache/
 .clj-kondo/imports/
 
 .idea/
 *.iml
 .lsp/
+
+.DS_Store

@@ -1,0 +1,50 @@
+<!DOCTYPE html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <title>Solid apps</title>
+    <style>
+      :root { color-scheme: light dark; }
+      body {
+        margin: 0; min-height: 100vh; display: grid; place-items: center;
+        font-family: system-ui, -apple-system, "Segoe UI", sans-serif;
+        line-height: 1.5; padding: 1rem;
+      }
+      main { max-width: 26rem; }
+      h1 { font-size: 1.5rem; margin: 0 0 0.25rem; }
+      p.lede { color: #6b7280; margin-top: 0; }
+      ul { list-style: none; padding: 0; margin: 2rem 0 0; }
+      li + li { margin-top: 0.75rem; }
+      a.app {
+        display: block; padding: 1rem; border-radius: 0.75rem;
+        border: 1px solid currentColor; text-decoration: none; color: inherit;
+      }
+      a.app strong { display: block; }
+      a.app span { color: #6b7280; font-size: 0.9rem; }
+    </style>
+  </head>
+  <body>
+    <main>
+      <h1>Solid apps</h1>
+      <p class="lede">
+        Two static single-page apps that talk directly to Solid pods from
+        your browser. No backend, no tracking.
+      </p>
+      <ul>
+        <li>
+          <a class="app" href="feed/">
+            <strong>Solid Social</strong>
+            <span>A feed of the people you follow, from data they own.</span>
+          </a>
+        </li>
+        <li>
+          <a class="app" href="browser/">
+            <strong>Pod Browser</strong>
+            <span>Browse and manage the files in your pod.</span>
+          </a>
+        </li>
+      </ul>
+    </main>
+  </body>
+</html>
