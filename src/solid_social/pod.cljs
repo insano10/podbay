@@ -55,15 +55,58 @@
     (or storage
         (str (.-origin (js/URL. webid)) "/"))))
 
+;; Nothing in Solid fixes where data lives — folder names are an
+;; implementation detail, and two apps agreeing on one would be a
+;; coincidence, not interoperability. What a pod publishes instead is a
+;; *type index*: a document mapping an RDF class to the container holding
+;; instances of it. So posts are found by asking "where do this person's
+;; as:Note resources live?" rather than by knowing about solid-social/.
+;;
+;; Cached like the profile, since a refresh looks it up for every author.
+(defonce ^:private type-index-cache (atom {}))
+
+(defn- type-index+
+  "The WebID's public type index as a dataset, or nil if it has none."
+  [webid]
+  (or (get @type-index-cache webid)
+      (let [ds+ (-> (p/let [thing (profile-thing+ webid)
+                            url (when thing (sc/getUrl thing v/solid-publicTypeIndex))]
+                      (when url
+                        (sc/getSolidDataset url (opts))))
+                    (p/catch (fn [_] nil)))]
+        (swap! type-index-cache assoc webid ds+)
+        ds+)))
+
+(defn- registered-container+
+  "The container registered for `class-iri` in the WebID's public type
+   index, or nil if there's no index or no registration for that class."
+  [webid class-iri]
+  (-> (p/let [ds (type-index+ webid)]
+        (when ds
+          (->> (array-seq (sc/getThingAll ds))
+               (filter #(some #{class-iri}
+                              (array-seq (sc/getUrlAll % v/solid-forClass))))
+               (keep #(sc/getUrl % v/solid-instanceContainer))
+               first)))
+      (p/catch (fn [_] nil))))
+
 (defn forget-caches!
   "Drop cached pod lookups — call on logout, since the next session may
    be a different person."
   []
-  (reset! profile-cache {}))
+  (reset! profile-cache {})
+  (reset! type-index-cache {}))
 
-(defn- posts-container+ [webid]
-  (p/let [root (pod-root+ webid)]
-    (str root app-path "posts/")))
+(defn- posts-container+
+  "Where this person's posts live: whatever their type index says holds
+   as:Note instances, falling back to our own convention for pods that
+   publish nothing. Reads and writes both resolve through here, so the
+   app never keeps two ideas of where a person's posts are."
+  [webid]
+  (p/let [registered (registered-container+ webid v/as-Note)]
+    (or registered
+        (p/let [root (pod-root+ webid)]
+          (str root app-path "posts/")))))
 
 (defn- ensure-container+
   "Create a container if it doesn't exist; ignore 'already exists' errors."
@@ -154,21 +197,58 @@
               (sc/addUrl v/as-attributedTo webid))
           media-urls))
 
+(defn- register-posts-container!+
+  "Advertise `container` as this person's home for as:Note in their
+   public type index, so other apps can find these posts without knowing
+   anything about our folder names.
+
+   Only ever adds a registration when the class is unclaimed: if some
+   other app already registered a posts container, posts-container+ has
+   already resolved to theirs and we're writing there, so there is
+   nothing to add. Best-effort — a pod with no type index, or one we
+   can't write to, keeps working on the convention path."
+  [webid container]
+  (-> (p/let [ds (type-index+ webid)
+              existing (registered-container+ webid v/as-Note)]
+        (when (and ds (nil? existing))
+          (p/let [reg (-> (sc/createThing #js {:name "solid-social-posts"})
+                          (sc/addUrl v/rdf-type v/solid-TypeRegistration)
+                          (sc/addUrl v/solid-forClass v/as-Note)
+                          (sc/addUrl v/solid-instanceContainer container))
+                  index-url (sc/getSourceUrl ds)
+                  _ (sc/saveSolidDatasetAt index-url (sc/setThing ds reg) (opts))]
+            ;; the cached copy is now a version behind
+            (swap! type-index-cache dissoc webid))))
+      (p/catch (fn [_] nil))))
+
+(defn- media-container
+  "Attachments live in a media/ container *inside* the posts container,
+   so they follow it wherever the type index points. Nesting rather than
+   siblings is deliberate: access control in Solid is per-container, so
+   this way a single grant on the posts container also covers the media
+   those posts reference, instead of needing two."
+  [posts-container]
+  (str posts-container
+       (when-not (str/ends-with? posts-container "/") "/")
+       "media/"))
+
 (defn save-post+
   "Upload any media files, then save the post as a new Turtle resource
    named by its timestamp. Resolves when the post is stored."
   [webid content files]
-  (p/let [root (pod-root+ webid)
-          posts-url (str root app-path "posts/")
-          media-url (str root app-path "media/")
+  (p/let [posts-url (posts-container+ webid)
+          media-url (media-container posts-url)
           _ (ensure-container+ posts-url)
           _ (when (seq files) (ensure-container+ media-url))
           media-urls (p/all (map #(upload-file+ media-url %) files))
           now (js/Date.)
           slug (str/replace (.toISOString now) #"[:.]" "-")
           ds (sc/setThing (sc/createSolidDataset)
-                          (post-thing webid content now media-urls))]
-    (sc/saveSolidDatasetAt (str posts-url slug ".ttl") ds (opts))))
+                          (post-thing webid content now media-urls))
+          saved (sc/saveSolidDatasetAt (str posts-url slug ".ttl") ds (opts))]
+    ;; publish where these posts live, once the container definitely exists
+    (register-posts-container!+ webid posts-url)
+    saved))
 
 ;; ---------------------------------------------------------------------------
 ;; Contacts

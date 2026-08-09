@@ -19,6 +19,15 @@
 ;; where a WebID profile points at the pod's storage root
 (def pim-storage "http://www.w3.org/ns/pim/space#storage")
 
+;; Type indexes: how a pod advertises where each kind of data lives, so
+;; apps discover containers instead of assuming folder names.
+(def ^:private solid "http://www.w3.org/ns/solid/terms#")
+
+(def solid-publicTypeIndex (str solid "publicTypeIndex"))
+(def solid-TypeRegistration (str solid "TypeRegistration"))
+(def solid-forClass (str solid "forClass"))
+(def solid-instanceContainer (str solid "instanceContainer"))
+
 (def foaf-name (str foaf "name"))
 (def foaf-img (str foaf "img"))
 (def vcard-fn (str vcard "fn"))

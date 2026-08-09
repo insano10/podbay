@@ -103,15 +103,23 @@ curl -sI https://insano10.github.io/solid-social/clientid.jsonld | grep -i conte
 
 ## How data is stored
 
-Everything lives in the pod under `solid-social/` at the storage root:
+By default everything lives in the pod under `solid-social/` at the
+storage root — though the posts container is discovered rather than
+assumed, so it and its media can be anywhere (see below):
 
 ```
 solid-social/
-├── contacts.ttl    # WebIDs you follow
-├── posts/          # one Turtle resource per post
-│   └── 2026-08-01T12-00-00-000Z.ttl
-└── media/          # uploaded photos/videos, referenced by posts
+├── contacts.ttl        # WebIDs you follow
+└── posts/              # one Turtle resource per post
+    ├── 2026-08-01T12-00-00-000Z.ttl
+    └── media/          # uploaded photos/videos, referenced by posts
 ```
+
+`media/` sits inside the posts container rather than beside it, so it
+follows wherever the type index points posts, and so one access grant on
+the posts container covers the attachments those posts reference —
+access control in Solid is per-container. Posts link attachments by
+absolute URL, so media written under an older layout keeps resolving.
 
 Posts are [ActivityStreams 2.0](https://www.w3.org/TR/activitystreams-vocabulary/)
 `Note`s, so the data stays legible to other Solid apps:
@@ -127,10 +135,45 @@ Posts are [ActivityStreams 2.0](https://www.w3.org/TR/activitystreams-vocabulary
     as:attachment <../media/sunset.jpg> .
 ```
 
-The feed is assembled client-side: for each followed WebID the app
-resolves the pod's storage root (via `pim:storage` in the profile),
-lists `solid-social/posts/`, fetches each post, and merges everything
-sorted by `as:published`.
+The feed is assembled client-side: for each followed WebID the app finds
+that person's posts container, lists it, fetches each post, and merges
+everything sorted by `as:published`.
+
+### Finding where posts live
+
+Solid mandates no folder layout, so `solid-social/` is an
+implementation detail and not something another app could ever guess.
+Portability comes from the vocabulary (ActivityStreams, above) plus
+*discovery*: a pod advertises where each kind of data lives in its
+**[type index](https://solid.github.io/type-indexes/)**, linked from the
+WebID profile as `solid:publicTypeIndex`.
+
+So the question the app asks is "where do this person's `as:Note`
+resources live?", never "what's in their `solid-social/` folder":
+
+```turtle
+<#solid-social-posts>
+    a solid:TypeRegistration ;
+    solid:forClass as:Note ;
+    solid:instanceContainer </solid-social/posts/> .
+```
+
+`pod/posts-container+` resolves that registration and falls back to
+`solid-social/posts/` under the storage root when a pod publishes no
+index or no registration for the class. **Reads and writes both go
+through it**, so the app never holds two different ideas of where
+someone's posts are.
+
+Publishing a post registers the container, but only when nothing has
+claimed `as:Note` yet. If another app got there first, the lookup has
+already resolved to *their* container and posts are written there —
+which is the point of the exercise. Registration is best-effort: a pod
+with no type index, or one the app can't write to, silently stays on the
+convention path.
+
+The cost is one extra round trip per author, to read the index. That's
+real on a slow pod (see below), and it's why the index is cached per
+WebID alongside the profile.
 
 Each person's pod answers at its own pace, so posts are merged into the
 feed as they arrive rather than waiting for the slowest contact —
@@ -147,11 +190,12 @@ latency, so what the code optimises is **the number of requests on the
 critical path**:
 
 - A WebID profile is fetched **once** per person, with the promise
-  cached and shared (`pod/profile+`, cleared on logout). It's needed
-  both for the storage root and for the display name and avatar, and
-  those used to fetch it separately. That's also why `pod-root+` reads
-  `pim:storage` itself instead of calling solid-client's
-  `getPodUrlAll`, which would fetch the profile again internally.
+  cached and shared (`pod/profile+`, cleared on logout). It's needed for
+  the storage root, the type index link, and the display name and
+  avatar, and those used to fetch it separately. That's also why
+  `pod-root+` reads `pim:storage` itself instead of calling
+  solid-client's `getPodUrlAll`, which would fetch the profile again
+  internally. Type indexes are cached the same way.
 - On startup your own posts and your contact list are requested **in
   parallel**. They're independent, but serialising them meant the feed
   issued no request at all until the contacts round trip had finished.
@@ -305,6 +349,12 @@ or ignore it.
 `pod.cljs` is the only namespace that touches JS objects; everything
 above it works with plain Clojure maps.
 
+Naming: a **`+` suffix means the function returns a promise**
+(`load-posts+`, `media-url+`). That's a project convention rather than
+anything standard — Clojure reserves `?` for predicates and `!` for
+side effects, but has settled on nothing for async — so it's worth
+keeping applied consistently.
+
 ## Current limitations / next steps
 
 - **Access control is manual.** New resources inherit your pod's default
@@ -317,6 +367,10 @@ above it works with plain Clojure maps.
   (they run in parallel, but the round trips add up). Fine for
   personal-network scale; beyond that you'd want container-level date
   filtering or a summary index resource.
-- **Posts container discovery is by convention** (`solid-social/posts/`
-  under the storage root). A more robust approach is registering the
-  container in each user's [Type Index](https://solid.github.io/type-indexes/).
+- **The contacts list is still found by convention**
+  (`solid-social/contacts.ttl`), unlike posts. Registering it would mean
+  choosing an RDF class for "a list of people I follow", and there isn't
+  an established one — ActivityStreams models `as:following` as a
+  property of an actor pointing at a collection, not as a class you can
+  register. It's also private app state rather than part of the
+  interoperable surface, so the convention costs nothing today.
