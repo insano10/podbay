@@ -1,0 +1,21 @@
+{
+  "@context": ["https://www.w3.org/ns/solid/oidc-context.jsonld"],
+
+  "client_id": "https://insano10.github.io/solid-social/clientid-browser.jsonld",
+  "client_name": "Pod Browser",
+  "client_uri": "https://insano10.github.io/solid-social/browser/",
+
+  "redirect_uris": [
+    "https://insano10.github.io/solid-social/browser/",
+    "https://insano10.github.io/solid-social/browser/index.html"
+  ],
+  "post_logout_redirect_uris": [
+    "https://insano10.github.io/solid-social/browser/"
+  ],
+
+  "scope": "openid profile offline_access webid",
+  "grant_types": ["authorization_code", "refresh_token"],
+  "response_types": ["code"],
+  "token_endpoint_auth_method": "none",
+  "application_type": "web"
+}

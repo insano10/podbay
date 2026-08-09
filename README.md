@@ -29,9 +29,18 @@ npm install
 npm run dev
 ```
 
-Then open <http://localhost:8080>. If that port is taken, shadow-cljs
-picks the next free one — check its startup output. shadow-cljs
-hot-reloads code on save.
+This watches **both** apps in this repo:
+
+| URL | App |
+|---|---|
+| <http://localhost:8080> | Solid Social — the feed |
+| <http://localhost:8081> | [Pod Browser](#pod-browser) — a file browser for your pod |
+
+They're on **separate ports deliberately**, and it matters: see
+[Two apps, one session](#two-apps-one-session).
+
+If that port is taken, shadow-cljs picks the next free one — check its
+startup output. shadow-cljs hot-reloads code on save.
 For a REPL into the running app: `npm run repl` (or connect your editor
 to the nREPL port shadow-cljs prints on startup).
 
@@ -100,6 +109,78 @@ a document served as `text/plain` may be rejected:
 ```sh
 curl -sI https://insano10.github.io/solid-social/clientid.jsonld | grep -i content-type
 ```
+
+## Pod Browser
+
+A second, separate app in this repo, served at `/browser/`: a plain
+file browser for any Solid pod — pick your identity provider, sign in,
+and walk the containers like folders. It exists because the alternatives
+are thin on the ground. Inrupt sunset PodBrowser, Penny is explicitly a
+developer inspector rather than a file manager, Solid File Manager
+hasn't been touched since March 2025, and SolidOS is something a
+*server* deploys rather than an app you can point at an arbitrary pod —
+which is why an ESS pod, serving no HTML at all, simply won't open in
+any of them.
+
+```
+src/pod_browser/
+├── core.cljs     # entry point
+├── state.cljs    # one atom, plus the actions that change it
+├── views.cljs    # Reagent components
+└── pod.cljs      # the only JS-interop namespace here
+```
+
+It shares exactly one namespace with the feed app, `solid-social.auth`,
+rather than reimplementing the OIDC dance. Everything else is its own.
+
+What it does today:
+
+- **Listing** costs one request per folder, not one per file. A
+  container's own representation already describes its children — type,
+  size, modification time — so `list-container+` reads all of it from
+  the response it already has. Servers aren't obliged to publish those,
+  so every field is optional and simply renders blank.
+- **Opening a file** splits content and metadata into two panes, so the
+  detail stays visible beside what you're reading. Text and RDF render
+  inline, images preview, anything else offers a download. The metadata
+  pane shows the response headers the server exposes — including
+  `WAC-Allow`, which is your actual access to that resource.
+- **A failed read is shown, not swallowed.** A 403 renders as a 403 with
+  the server's message, because "you may not read this" is information.
+- **Right-click** any row for open, copy URL, open raw, and delete.
+  Delete asks for confirmation naming the resource, and containers use a
+  different call from files — most servers refuse to delete a container
+  that still has children.
+
+### Two apps, one session
+
+`solid-client-authn-browser` keeps its session in `localStorage`, which
+is scoped to an **origin** — not to a path. Two apps served from the
+same origin therefore share one session, and the failure mode is not
+subtle: whichever app loads second finds the other's stored session,
+silently re-authenticates with `restorePreviousSession`, and — because
+`silentlyAuthenticate` reuses the *stored* session's redirect URL — the
+identity provider sends the user back to the **other app**.
+
+Hence two dev ports: `8080` for the feed, `8081` for the browser. Two
+origins, two `localStorage` scopes, no interference.
+
+This is unresolved for the **deployed** site, where both live under
+`insano10.github.io/solid-social/` and so share an origin. The fix is
+either a separate host for the browser, or constructing an explicit
+`Session` with namespaced storage instead of the default one — the
+library supports it (`new Session({secureStorage, insecureStorage})`),
+though the keys tracking *which* session to restore are still written
+to raw `localStorage` and would stay shared.
+
+### Its own identity
+
+The browser has separate client identifier documents
+(`clientid-browser.jsonld`, `clientid-browser-dev.jsonld`) from the feed
+app's, so the consent screen names what is actually asking for access —
+"Pod Browser", not "Solid Social". Same split between published and
+localhost redirect URIs, for the same reason. See
+[Client identity](#client-identity).
 
 ## How data is stored
 
@@ -180,6 +261,52 @@ feed as they arrive rather than waiting for the slowest contact —
 `state/db` holds `:posts-by-author` and `:posts` is the flattened sort
 of it. A contact whose pod is unreachable contributes `[]` instead of
 breaking the feed.
+
+### Flaky servers
+
+Pod servers are not always reliable. solidcommunity.net intermittently
+answers **502** through its CDN — including on CORS preflights, which is
+the nastiest version: a failed preflight surfaces as a bare
+`TypeError: Failed to fetch` plus a console message blaming CORS, so a
+transient outage is indistinguishable from a configuration error at a
+glance. (The tell is that a real CORS misconfiguration fails *every*
+time, identically; a blip fails once and then works.)
+
+`auth/auth-fetch` therefore retries: up to three attempts with a
+300ms/900ms backoff plus jitter, on a rejected request or a
+429/500/502/503/504 response. Only repeatable methods are retried —
+`GET`, `HEAD`, `OPTIONS`, `PUT`, `DELETE` — since `POST` creates
+something new on each attempt and `PATCH` may not survive being applied
+twice. Any 4xx is an answer, not a failure, and comes straight back.
+
+Every pod request in both apps goes through it, so this is also the most
+likely reason the third-party pod browsers feel unreliable: they surface
+the blip rather than absorbing it.
+
+### Caching
+
+Pod responses carry no `Cache-Control`, but they do carry
+`Last-Modified` and `ETag`. With no explicit directive the browser
+applies *heuristic freshness* and may reuse a response without asking —
+so a container listing fetched right after a write can still describe
+the old contents. That's what made a deleted file stay on screen.
+
+There's no way to purge a single entry from the browser's HTTP cache
+from JavaScript, so the only lever is a per-request cache mode. Reads of
+things that change are therefore marked `no-cache` — **still cached, but
+always revalidated**, so an unchanged resource costs a 304 rather than a
+full body. Not `no-store`, which would throw the cache away entirely.
+
+| Always revalidated | Cached normally |
+|---|---|
+| container listings (both apps) | individual post documents |
+| `contacts.ttl` | WebID profiles |
+| any file opened in the browser | type indexes, media |
+
+The right-hand column is either immutable once written or already
+memoised in-process for the session (`pod/profile+`, `pod/type-index+`),
+with those in-memory caches dropped explicitly — on logout, and after
+registering a type so the next read sees the registration.
 
 ### Round trips
 

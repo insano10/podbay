@@ -1,8 +1,14 @@
 ;; Source paths and dependencies live in deps.edn — see :deps below.
 {:deps true
 
- ;; serves public/ during development
- :dev-http {8080 "public"}
+ ;; Two ports, two origins — and that separation is load-bearing, not
+ ;; tidiness. solid-client-authn-browser keeps its session in
+ ;; localStorage, which is per-origin, so two apps sharing one origin
+ ;; share one session: whichever loads second silently re-authenticates
+ ;; using the *other* app's stored redirect URL and lands the user
+ ;; there. Separate ports give each its own storage.
+ :dev-http {8080 "public"
+            8081 "public/browser"}
 
  :builds
  {:app {:target :browser
@@ -27,4 +33,26 @@
         :dev
         {:closure-defines
          {solid-social.auth/client-id
-          "https://insano10.github.io/solid-social/clientid-dev.jsonld"}}}}}
+          "https://insano10.github.io/solid-social/clientid-dev.jsonld"}}}
+
+  ;; A separate app, served at /browser/, sharing only solid-social.auth.
+  ;; It gets its own client identity so the consent screen names what is
+  ;; actually asking for access.
+  :pod-browser
+  {:target :browser
+   :output-dir "public/browser/js"
+   :asset-path "js"
+   :modules {:main {:init-fn pod-browser.core/init}}
+
+   :release
+   {:closure-defines
+    {solid-social.auth/client-id
+     "https://insano10.github.io/solid-social/clientid-browser.jsonld"}}
+
+   ;; Enable once this repo's Pages deploy has published the document
+   ;; below — until then a dev build can't use it, and dynamic
+   ;; registration (the default) is what works.
+   #_:dev
+   #_{:closure-defines
+      {solid-social.auth/client-id
+       "https://insano10.github.io/solid-social/clientid-browser-dev.jsonld"}}}}}

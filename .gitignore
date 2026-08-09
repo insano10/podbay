@@ -16,7 +16,9 @@ pom.xml.asc
 # npm / shadow-cljs
 node_modules/
 .shadow-cljs/
+# compiled output only — the index.html and css/ beside these are source
 public/js/
+public/browser/js/
 .clj-kondo/.cache/
 .clj-kondo/imports/
 

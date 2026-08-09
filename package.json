@@ -4,8 +4,8 @@
   "private": true,
   "description": "A lightweight, static social feed over Solid pods",
   "scripts": {
-    "dev": "shadow-cljs watch app",
-    "release": "shadow-cljs release app",
+    "dev": "shadow-cljs watch app pod-browser",
+    "release": "shadow-cljs release app pod-browser",
     "repl": "shadow-cljs cljs-repl app"
   },
   "dependencies": {
