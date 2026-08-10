@@ -261,23 +261,54 @@
        ^{:key k} [:<> [:dt k] [:dd.mono v]])]]
    [sharing-pane]])
 
-(defn- content-pane [{:keys [text object-url image? content-type name url]}]
-  [:section.content
-   (cond
-     image? [:img.preview {:src object-url :alt name}]
+(defn- editor [draft]
+  (let [saving? (:saving? @state/db)]
+    [:div.editor
+     [:textarea.editor-text
+      {:value draft
+       :spell-check false
+       :disabled saving?
+       :on-change #(state/update-draft! (.. % -target -value))
+       ;; Cmd/Ctrl-Enter saves, Escape abandons — the shortcuts anyone
+       ;; editing a config file by hand will try first
+       :on-key-down (fn [^js e]
+                      (cond
+                        (and (= "Enter" (.-key e)) (or (.-metaKey e) (.-ctrlKey e)))
+                        (state/save-edit!)
 
-     (some? text)
-     [:pre.code [:code text]]
+                        (= "Escape" (.-key e))
+                        (state/cancel-edit!)))}]
+     [:div.editor-actions
+      [:span.hint "Saved as-is — your comments and formatting are kept."]
+      [:button.subtle {:on-click state/cancel-edit! :disabled saving?} "Cancel"]
+      [:button.primary {:on-click state/save-edit! :disabled saving?}
+       (if saving? "Saving…" "Save")]]]))
 
-     object-url
-     [:div.no-preview
-      [:p "No preview for " [:code (or content-type "this type")] "."]
-      [:a.primary {:href object-url :download name} "Download"]]
+(defn- content-pane [{:keys [text object-url image? content-type name url] :as open}]
+  (let [editing (:editing @state/db)
+        editing? (= (:url editing) url)]
+    [:section.content
+     (cond
+       editing? [editor (:draft editing)]
 
-     :else
-     [:p.hint "Nothing to show."])
-   (when (and (not image?) (nil? text) (nil? object-url))
-     [:a {:href url :target "_blank" :rel "noopener"} "Open raw"])])
+       image? [:img.preview {:src object-url :alt name}]
+
+       (some? text)
+       [:<>
+        (when (state/editable? open)
+          [:div.content-actions
+           [:button.subtle {:on-click state/start-edit!} "✎ Edit"]])
+        [:pre.code [:code text]]]
+
+       object-url
+       [:div.no-preview
+        [:p "No preview for " [:code (or content-type "this type")] "."]
+        [:a.primary {:href object-url :download name} "Download"]]
+
+       :else
+       [:p.hint "Nothing to show."])
+     (when (and (not image?) (nil? text) (nil? object-url))
+       [:a {:href url :target "_blank" :rel "noopener"} "Open raw"])]))
 
 (defn- viewer []
   (let [{:keys [open opening]} @state/db]

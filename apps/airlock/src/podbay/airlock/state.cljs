@@ -16,6 +16,8 @@
            :loading? false
            :open nil            ; the resource being viewed, if any
            :access nil          ; who that resource is shared with
+           :editing nil         ; {:url :draft} while a file is being edited
+           :saving? false
            :access-busy? false
            :propagation nil     ; did a container grant reach its contents?
            :confirm-public nil  ; a public grant awaiting confirmation
@@ -47,7 +49,8 @@
 (defn close-file! []
   (when-let [object-url (:object-url (:open @db))]
     (pod/release-object-url! object-url))
-  (swap! db assoc :open nil :opening nil :access nil :propagation nil))
+  (swap! db assoc :open nil :opening nil :access nil :propagation nil
+                  :editing nil))
 
 (defn- load-access!
   "Fetch who a resource is shared with, alongside its contents. Kept in
@@ -83,6 +86,59 @@
                     (pod/release-object-url! o)))))
       (p/catch #(do (swap! db assoc :opening nil)
                     (set-error! (describe (str "Couldn't read " url) %))))))
+
+;; ---------------------------------------------------------------------------
+;; Editing
+
+(defn- reload-listing!
+  "Re-read the current container without disturbing the open file — a
+   save changes its size and modified time, so the row is stale."
+  []
+  (when-let [path (:path @db)]
+    (-> (pod/list-container+ path)
+        (p/then (fn [entries]
+                  (when (= path (:path @db))
+                    (swap! db assoc :entries entries))))
+        (p/catch (fn [_] nil)))))
+
+(defn editable?
+  "Only text we successfully read, and never a container — a container's
+   representation is generated from what it holds, not stored."
+  [{:keys [ok? text container?]}]
+  (boolean (and ok? (some? text) (not container?))))
+
+(defn start-edit! []
+  (when-let [open (:open @db)]
+    (when (editable? open)
+      (swap! db assoc :editing {:url (:url open) :draft (:text open)}))))
+
+(defn update-draft! [text]
+  (swap! db assoc-in [:editing :draft] text))
+
+(defn cancel-edit! []
+  (swap! db assoc :editing nil))
+
+(defn save-edit! []
+  (let [{:keys [url draft]} (:editing @db)
+        open (:open @db)]
+    (when (and url (= url (:url open)))
+      (swap! db assoc :saving? true :error nil)
+      (-> (pod/save-text+ open draft)
+          (p/then (fn [_]
+                    (swap! db assoc
+                           :saving? false
+                           :editing nil
+                           ;; keep what was saved on screen rather than
+                           ;; re-reading: the server has it now, and a
+                           ;; re-read costs a round trip on a slow pod
+                           :open (assoc open :text draft))
+                    ;; size and modified changed, so the listing is stale
+                    (reload-listing!)))
+          (p/catch (fn [e]
+                     (swap! db assoc :saving? false)
+                     ;; the draft is deliberately left in place so a
+                     ;; failed save never loses what was typed
+                     (set-error! (describe (str "Couldn't save " url) e))))))))
 
 ;; ---------------------------------------------------------------------------
 ;; Navigating

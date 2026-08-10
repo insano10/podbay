@@ -1,11 +1,17 @@
 - make sure deployed apps work ok and all features are good
+ - under sharing in airlock what are the see sharing and change sharing badges?
 - finish renaming exercise
+ - update public type index on both pods to podbay-comms-posts
+ - follow up on what this registration means and why it's not just generic as:Notes can be found here, why mention the app?
 - make adding connection work in feed
  - ensure it is obvious for a first time user what steps to follow
  - also remove connection
 
 - add better styling
-- make 502 handling better (spinners and more retries)
+ - airlock back breadcrumb and make info panel icon more obvious
+- make 502 handling better (error message too vague, spinners and more retries)
 - pod hygiene app
  - checks for what data is where, type declarations and ACLs
  - extended profile shenanigans
+- add support to read more than 1 public type index for as:Note class
+ - as it stands we will only take the first entry as where the posts are, but we want to slurp it all in (for now)

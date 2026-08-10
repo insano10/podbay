@@ -417,3 +417,30 @@ button.revoke { font-size: 0.7rem; margin-left: 0.4rem; }
   font-size: 0.8rem; color: var(--danger);
   background: var(--danger-soft); padding: 0.5rem; border-radius: 0.375rem;
 }
+
+/* --- editing ----------------------------------------------------------- */
+
+.content-actions { display: flex; justify-content: flex-end; margin-bottom: 0.5rem; }
+
+.editor { display: flex; flex-direction: column; height: 100%; gap: 0.5rem; }
+
+.editor-text {
+  flex: 1;
+  min-height: 18rem;
+  width: 100%;
+  resize: vertical;
+  padding: 0.75rem;
+  border: 1px solid var(--border);
+  border-radius: 0.5rem;
+  background: var(--bg);
+  color: var(--text);
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+  font-size: 0.8rem;
+  line-height: 1.6;
+  tab-size: 2;
+}
+.editor-text:focus { outline: 2px solid var(--accent); outline-offset: -1px; }
+
+.editor-actions { display: flex; align-items: center; gap: 0.5rem; }
+.editor-actions .hint { flex: 1; padding: 0; font-size: 0.75rem; }
+.editor-actions button.primary { padding: 0.35rem 0.9rem; font-size: 0.85rem; }

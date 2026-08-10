@@ -209,6 +209,19 @@ What it does today:
   members'. `universalAccess` unifies the API, not the semantics — so
   after granting on a container the app reads back a resource *inside*
   it and says whether the grant actually reached it.
+- **Editing** any text resource in place — Turtle, JSON, plain text.
+  It's a raw `PUT` of exactly what you typed rather than a parse and
+  reserialise through solid-client, so hand-written comments, prefixes
+  and layout survive. Cmd/Ctrl-Enter saves, Escape abandons, and a
+  failed save keeps your draft rather than discarding it.
+- **Saves are guarded against overwriting someone else's change.** The
+  `PUT` carries `If-Match` with the ETag from the read. That needs care,
+  because servers commonly issue *weak* ETags and `If-Match` compares
+  strongly — so a 412 may mean "someone else changed this" or merely
+  "this server won't honour a weak validator". The app re-reads the
+  validator to tell those apart: unchanged means the precondition was
+  refused on principle and the write is repeated; changed means a real
+  conflict, reported and never overwritten.
 - **Right-click** any row for open, copy URL, open raw, and delete.
   Delete asks for confirmation naming the resource, and containers use a
   different call from files — most servers refuse to delete a container
@@ -629,11 +642,24 @@ keeping applied consistently.
 
 ## Current limitations / next steps
 
-- **Access control is manual.** New resources inherit your pod's default
-  permissions, which usually means private. For friends to see your
-  posts you currently need to make `podbay/comms/` readable (by them, or
-  publicly) via your pod provider's UI. Managing ACLs from the app is
-  the natural next feature.
+- **Comms doesn't manage access; Airlock does.** New resources inherit
+  your pod's defaults, which usually means private, so friends can't see
+  your posts until the posts container is shared with them. Airlock can
+  now do that — open the container, ⓘ, grant their WebID read — but
+  publishing a post and sharing it remain two separate acts, and Comms
+  gives no hint that what you just wrote is unreadable by the people you
+  wrote it for.
+- **Only the first type-index registration for a class is used**, and
+  `solid:instance` is ignored entirely. A type index is a set of hints,
+  not an exhaustive index: several registrations may name the same
+  class — typically one per app — a single registration may carry
+  several `solid:instanceContainer` values, and `solid:instance` points
+  at individual documents rather than containers. `registered-container+`
+  takes the first container it finds, and `getThingAll` ordering isn't
+  guaranteed, so a pod with two registrations for `as:Note` gets one of
+  them arbitrarily. Reading them all and merging would let the feed pick
+  up posts a *different* Solid social app wrote into its own container,
+  which is the whole point of discovery.
 - **No pagination.** Every post from every contact is loaded on refresh,
   and since each post is its own resource, that's one request per post
   (they run in parallel, but the round trips add up). Fine for

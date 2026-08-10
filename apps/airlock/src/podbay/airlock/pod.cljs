@@ -137,7 +137,9 @@
                 :status (.-status resp)
                 :ok? (.-ok resp)
                 :content-type content-type
-                :headers headers}]
+                :headers headers
+                ;; kept for If-Match when saving an edit
+                :etag (get headers "etag")}]
     (cond
       (not (.-ok resp))
       (p/let [body (.text resp)] (assoc base :text body))
@@ -233,7 +235,52 @@
     (access->map result)))
 
 ;; ---------------------------------------------------------------------------
-;; Writing (deleting, for now)
+;; Writing
+
+(defn- put+ [url text content-type extra-headers]
+  (auth/auth-fetch
+   url
+   (clj->js {:method "PUT"
+             :headers (merge {"Content-Type" (or content-type "text/turtle")}
+                             extra-headers)
+             :body text})))
+
+(defn- current-etag+
+  "The resource's validator as it stands now, or nil."
+  [url]
+  (-> (p/let [resp (auth/auth-fetch url #js {:method "HEAD" :cache "no-cache"})]
+        (when (.-ok resp) (.get (.-headers resp) "etag")))
+      (p/catch (fn [_] nil))))
+
+(defn save-text+
+  "Replace a text resource's contents, sending it back as it was typed.
+
+   Deliberately a raw PUT rather than parsing and reserialising through
+   solid-client: someone hand-editing Turtle wants their comments,
+   prefixes and layout preserved, not normalised away.
+
+   Saves are guarded with If-Match so a resource changed by someone else
+   isn't silently overwritten. That guard needs care, because servers
+   commonly issue *weak* ETags (`W/\"…\"`) and If-Match is defined to
+   compare strongly — so a 412 may mean 'someone else changed this' or
+   merely 'this server won't honour a weak validator'. Rather than guess,
+   re-read the validator: unchanged means the precondition was refused on
+   principle and the write is safe to repeat; changed means a real
+   conflict, which is reported and never overwritten."
+  [{:keys [url content-type etag]} text]
+  (p/let [resp (put+ url text content-type (when etag {"If-Match" etag}))
+          resp (if (and etag (= 412 (.-status resp)))
+                 (p/let [current (current-etag+ url)]
+                   (if (or (nil? current) (= etag current))
+                     (put+ url text content-type nil)
+                     (p/rejected
+                      (js/Error. "Someone else changed this since you opened it — reopen it and reapply your edit."))))
+                 resp)]
+    (if (.-ok resp)
+      resp
+      (p/let [body (.text resp)]
+        (p/rejected (js/Error. (str "Save failed: " (.-status resp)
+                                    (when (seq body) (str " — " body)))))))))
 
 (defn delete+
   "Delete a resource. Containers need a different call, and most servers
