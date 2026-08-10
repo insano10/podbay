@@ -304,7 +304,14 @@
                       (js/Error. "Someone else changed this since you opened it — reopen it and reapply your edit."))))
                  resp)]
     (if (.-ok resp)
-      resp
+      ;; Hand back the new validator so the caller can keep editing. A
+      ;; save makes the ETag it was holding stale, and re-sending that
+      ;; one looks exactly like someone else having changed the file —
+      ;; the conflict check would fire on your own previous save.
+      ;; Servers usually return it on the PUT; ask only if not.
+      (p/let [returned (.get (.-headers resp) "etag")
+              etag (or returned (current-etag+ url))]
+        {:etag etag})
       (p/let [body (.text resp)]
         (p/rejected (js/Error. (str "Save failed: " (.-status resp)
                                     (when (seq body) (str " — " body)))))))))

@@ -129,14 +129,15 @@
     (when (and url (= url (:url open)))
       (swap! db assoc :saving? true :error nil)
       (-> (pod/save-text+ open draft)
-          (p/then (fn [_]
+          (p/then (fn [{:keys [etag]}]
                     (swap! db assoc
                            :saving? false
                            :editing nil
                            ;; keep what was saved on screen rather than
-                           ;; re-reading: the server has it now, and a
-                           ;; re-read costs a round trip on a slow pod
-                           :open (assoc open :text draft))
+                           ;; re-reading — the server has it now — but
+                           ;; take the new validator, or the next save
+                           ;; would look like a conflict with itself
+                           :open (assoc open :text draft :etag etag))
                     ;; size and modified changed, so the listing is stale
                     (reload-listing!)))
           (p/catch (fn [e]

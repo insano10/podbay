@@ -222,6 +222,12 @@ What it does today:
   validator to tell those apart: unchanged means the precondition was
   refused on principle and the write is repeated; changed means a real
   conflict, reported and never overwritten.
+
+  A save also **carries the new validator forward**, taken from the
+  `PUT` response, or a `HEAD` if the server doesn't return one. Without
+  that, editing the same file twice without closing it would send the
+  superseded ETag the second time and report a conflict — with your own
+  previous save.
 - **Attached resources are reachable.** Every resource has an access
   control resource and a description hanging off it, advertised only in
   its `Link` header and deliberately excluded from `ldp:contains` — so
@@ -528,6 +534,14 @@ can't use `loading="lazy"` — `authed-media` defers them itself, starting
 the fetch only when an `IntersectionObserver` says the placeholder is
 near the viewport. Without that, a feed full of photos downloads every
 attachment at once, competing with the post fetches.
+
+An attachment that can't be fetched says so, with the reason, rather
+than degrading to a bare link — a failure and a deliberate link used to
+render identically. A **404** in particular is called out as "the post
+still points at where it used to be", because that's what it almost
+always means: media was moved or renamed and the post, which references
+it by absolute URL, wasn't updated. Nothing rewrites those references —
+see the move caveats under [Airlock](#airlock).
 
 Avatars are still plain `src` attributes, on the assumption that profile
 photos are public. If you hit a 401 on one, route it through
