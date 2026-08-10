@@ -115,6 +115,11 @@
   (let [{:keys [entries loading? path show-attached?]} @state/db]
     [:div.listing
      [:div.listing-tools
+      [:button.subtle {:on-click #(state/ask-new! :file)
+                       :title "Create an empty file here"} "+ File"]
+      [:button.subtle {:on-click #(state/ask-new! :folder)
+                       :title "Create a folder here"} "+ Folder"]
+      [:span.tool-sep]
       [:label.reveal
        [:input {:type "checkbox"
                 :checked (boolean show-attached?)
@@ -395,6 +400,33 @@
       [:li.sep]
       [:li [:button.danger {:on-click #(state/ask-delete! entry)} "Delete…"]]]]))
 
+(defn- new-dialog []
+  (when-let [{:keys [kind name]} (:creating @state/db)]
+    (let [folder? (= kind :folder)]
+      [:div.modal-backdrop {:on-click state/cancel-new!}
+       [:div.modal {:on-click (fn [^js e] (.stopPropagation e))}
+        [:h2 "New " (if folder? "folder" "file")]
+        [:label {:for "new-name"} "Name"]
+        [:input#new-name
+         {:type "text"
+          :value name
+          :auto-focus true
+          :spell-check false
+          :placeholder (if folder? "notes" "notes.ttl")
+          :on-change #(state/update-new-name! (.. % -target -value))
+          :on-key-down #(when (= "Enter" (.-key %)) (state/confirm-new!))}]
+        [:p.hint
+         (if folder?
+           "Created in the folder you're viewing."
+           [:<> "Created empty in the folder you're viewing, then opened
+                 for editing. The content type is guessed from the
+                 extension — "
+            [:code (pod/content-type-for (if (str/blank? name) "x" name))]
+            " for this name."])]
+        [:div.modal-actions
+         [:button {:on-click state/cancel-new!} "Cancel"]
+         [:button.primary {:on-click state/confirm-new!} "Create"]]]])))
+
 (defn- move-dialog []
   (when-let [{:keys [entry target]} (:moving @state/db)]
     (let [busy? (:move-busy? @state/db)
@@ -514,4 +546,5 @@
        [context-menu]
        [confirm-delete]
        [confirm-public]
-       [move-dialog]])))
+       [move-dialog]
+       [new-dialog]])))

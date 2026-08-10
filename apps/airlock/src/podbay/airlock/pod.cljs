@@ -318,6 +318,47 @@
     (sc/deleteFile url (opts))))
 
 ;; ---------------------------------------------------------------------------
+;; Creating
+
+(def ^:private extension-types
+  {"ttl" "text/turtle"
+   "n3" "text/n3"
+   "trig" "application/trig"
+   "nt" "application/n-triples"
+   "jsonld" "application/ld+json"
+   "json" "application/json"
+   "md" "text/markdown"
+   "html" "text/html"
+   "css" "text/css"
+   "js" "text/javascript"
+   "csv" "text/csv"})
+
+(defn content-type-for
+  "Guessed from the extension. A pod stores whatever content type you
+   declare, and gets it wrong quietly — a Turtle document served as
+   text/plain won't parse as RDF for anyone."
+  [name]
+  (let [ext (str/lower-case (or (second (re-find #"\.([^.]+)$" name)) ""))]
+    (get extension-types ext "text/plain")))
+
+(defn create-file+
+  "Create an empty resource. Empty Turtle is a valid document, so this
+   gives you something to open in the editor."
+  [url content-type]
+  (p/let [init (doto #js {:method "PUT"
+                          :headers #js {"Content-Type" content-type}}
+                 (aset "body" ""))
+          resp (auth/auth-fetch url init)]
+    (if (.-ok resp)
+      resp
+      (p/let [body (.text resp)]
+        (p/rejected (js/Error. (str (.-status resp)
+                                    (when (seq body) (str " — " body)))))))))
+
+(defn create-container+ [url]
+  (sc/createContainerAt url (opts)))
+
+;; ---------------------------------------------------------------------------
 ;; Moving
 ;;
 ;; There is no MOVE in Solid: a move is a copy followed by a delete, in

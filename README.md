@@ -234,6 +234,12 @@ What it does today:
   constructed. `<name>.acl` and `<name>.meta` are one server's
   convention; ESS names its access control resources differently, so
   guessing would work on one pod and quietly fail on another.
+- **New file and folder**, from the toolbar above the listing. A new
+  file is created empty and opened straight into the editor, with its
+  content type guessed from the extension — a pod stores whatever you
+  declare and gets it wrong quietly, and Turtle served as `text/plain`
+  won't parse as RDF for anyone. Creating over an existing name is
+  refused rather than silently replacing it, since `PUT` would.
 - **Rename and move**, from the context menu — edit the last segment to
   rename, or the path to relocate. Folders move everything inside them,
   depth-first.
@@ -477,6 +483,14 @@ only follows the linked profiles (via solid-client's `getProfileAll`)
 when that document carries no name. Those documents are often *not*
 readable by you, which is the intended design rather than a failure —
 so it falls back quietly to the WebID's host as a display name.
+
+**The type index lookup follows the same path**, and there it isn't a
+nicety. Inrupt's docs are explicit that a new pod's extended profile
+[is private by default](https://docs.inrupt.com/ess/2.4/services/service-pod-management/service-pod-provision),
+and the WebID document itself is served by their identity service rather
+than the pod — so the linked profile is the *only* document its owner
+can write. Without following `rdfs:seeAlso`, an ESS pod simply cannot
+publish anything discoverable.
 
 ### Round trips
 

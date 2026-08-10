@@ -26,6 +26,7 @@
            :opening nil         ; its url while the fetch is in flight
            :menu nil            ; {:x :y :entry} for the context menu
            :confirm nil         ; entry awaiting delete confirmation
+           :creating nil        ; {:kind :file|:folder :name ""} 
            :moving nil          ; {:entry :target} while renaming/moving
            :move-busy? false
            :error nil}))
@@ -305,6 +306,47 @@
 
 (defn hide-menu! []
   (swap! db assoc :menu nil))
+
+(defn ask-new! [kind]
+  (swap! db assoc :creating {:kind kind :name ""} :menu nil))
+
+(defn update-new-name! [name]
+  (swap! db assoc-in [:creating :name] name))
+
+(defn cancel-new! []
+  (swap! db assoc :creating nil))
+
+(defn confirm-new! []
+  (when-let [{:keys [kind name]} (:creating @db)]
+    (let [path (:path @db)
+          clean (str/trim name)
+          folder? (= kind :folder)]
+      (cond
+        (str/blank? clean)
+        (cancel-new!)
+
+        ;; a PUT to an existing URL would replace it without a word
+        (some #(= clean (:name %)) (:entries @db))
+        (do (cancel-new!)
+            (set-error! (str "“" clean "” already exists here.")))
+
+        :else
+        (let [url (str path (js/encodeURIComponent clean) (when folder? "/"))]
+          (swap! db assoc :creating nil :loading? true)
+          (-> (if folder?
+                (pod/create-container+ url)
+                (pod/create-file+ url (pod/content-type-for clean)))
+              (p/then (fn [_]
+                        (swap! db assoc :loading? false)
+                        (reload-listing!)
+                        ;; a new empty file is only useful open, so put
+                        ;; the cursor where it's about to be needed
+                        (when-not folder?
+                          (p/then (open-file! {:url url :name clean :container? false})
+                                  (fn [_] (start-edit!))))))
+              (p/catch (fn [e]
+                         (swap! db assoc :loading? false)
+                         (set-error! (describe (str "Couldn't create " url) e))))))))))
 
 (defn ask-move! [entry]
   (swap! db assoc :moving {:entry entry :target (:url entry)} :menu nil))

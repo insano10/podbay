@@ -13,5 +13,6 @@
 - pod hygiene app
  - checks for what data is where, type declarations and ACLs
  - extended profile shenanigans
+    - profile should be public but use seealso for more private info to share with select people
 - add support to read more than 1 public type index for as:Note class
  - as it stands we will only take the first entry as where the posts are, but we want to slurp it all in (for now)
