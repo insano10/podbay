@@ -222,6 +222,18 @@ What it does today:
   validator to tell those apart: unchanged means the precondition was
   refused on principle and the write is repeated; changed means a real
   conflict, reported and never overwritten.
+- **Attached resources are reachable.** Every resource has an access
+  control resource and a description hanging off it, advertised only in
+  its `Link` header and deliberately excluded from `ldp:contains` — so
+  they never appear in a listing. The metadata pane links to the open
+  resource's (free: the headers are already in hand), and *Show attached
+  resources* reveals them per row. That toggle is off by default because
+  it costs a `HEAD` per entry.
+
+  Their URLs are **always** taken from the `Link` header, never
+  constructed. `<name>.acl` and `<name>.meta` are one server's
+  convention; ESS names its access control resources differently, so
+  guessing would work on one pod and quietly fail on another.
 - **Right-click** any row for open, copy URL, open raw, and delete.
   Delete asks for confirmation naming the resource, and containers use a
   different call from files — most servers refuse to delete a container

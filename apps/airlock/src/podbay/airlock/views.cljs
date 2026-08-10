@@ -2,6 +2,7 @@
   "Reagent components. Everything renders from state/db; user actions
    call functions in podbay.airlock.state."
   (:require [clojure.string :as str]
+            [podbay.airlock.pod :as pod]
             [podbay.airlock.state :as state]
             [reagent.core :as r]))
 
@@ -98,9 +99,29 @@
      [:td.cell-size (or (format-size size) "")]
      [:td.cell-date (or (format-date modified) "")]]))
 
+(defn- attached-rows [url]
+  (let [{:keys [show-attached? attached]} @state/db]
+    (when show-attached?
+      (for [[rel target] (sort (select-keys (get attached url) ["acl" "describedby"]))]
+        ^{:key (str url rel)}
+        [:tr.row.attached-row
+         {:on-click #(state/open-url! target)}
+         [:td.cell-icon "↳"]
+         [:td.cell-name {:col-span 4}
+          [:span.name (pod/entry-name target)]
+          [:span.rel (if (= rel "acl") " access control" " description")]]]))))
+
 (defn- listing []
-  (let [{:keys [entries loading? path]} @state/db]
+  (let [{:keys [entries loading? path show-attached?]} @state/db]
     [:div.listing
+     [:div.listing-tools
+      [:label.reveal
+       [:input {:type "checkbox"
+                :checked (boolean show-attached?)
+                :on-change state/toggle-attached!}]
+       "Show attached resources"]
+      (when show-attached?
+        [:span.hint "One extra request per item — these aren't in the listing."])]
      (cond
        (and loading? (empty? entries))
        [:p.hint "Loading…"]
@@ -114,8 +135,10 @@
          [:tr
           [:th.cell-icon ""] [:th "Name"] [:th "Type"] [:th "Size"] [:th "Modified"]]]
         (into [:tbody]
-              (for [e entries]
-                ^{:key (:url e)} [row e]))])
+              (mapcat (fn [e]
+                        (into [^{:key (:url e)} [row e]]
+                              (attached-rows (:url e))))
+                      entries))])
      (when path
        [:p.path-hint path])]))
 
@@ -236,7 +259,8 @@
         [:summary "Why"]
         [:p.mono message]])]))
 
-(defn- metadata-pane [{:keys [url status ok? content-type headers size modified]}]
+(defn- metadata-pane [{:keys [url status ok? content-type headers size modified]
+                       :as open}]
   [:aside.meta
    [:h2 "Details"]
    [:dl
@@ -254,6 +278,19 @@
       [:<> [:dt "Your access"] [:dd w]])
     (when-let [e (get headers "etag")]
       [:<> [:dt "ETag"] [:dd.mono e]])]
+   (when-let [links (not-empty (select-keys (:links open) ["acl" "describedby"]))]
+     [:div.attached
+      [:h2 "Attached"]
+      [:p.hint "Discovered from the Link header — never by guessing a
+                filename, since servers name these differently."]
+      (for [[rel target] (sort links)]
+        ^{:key rel}
+        [:button.link-row {:on-click #(state/open-url! target)
+                           :title target}
+         (case rel
+           "acl" "Access control resource"
+           "describedby" "Description (.meta)"
+           rel)])])
    [:details.raw-headers
     [:summary "All response headers"]
     [:dl

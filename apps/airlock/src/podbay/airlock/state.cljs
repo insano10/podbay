@@ -18,6 +18,8 @@
            :access nil          ; who that resource is shared with
            :editing nil         ; {:url :draft} while a file is being edited
            :saving? false
+           :show-attached? false ; reveal each entry's .acl / .meta
+           :attached {}          ; entry url -> {rel url}
            :access-busy? false
            :propagation nil     ; did a container grant reach its contents?
            :confirm-public nil  ; a public grant awaiting confirmation
@@ -145,7 +147,8 @@
 
 (defn open-container! [url]
   (close-file!)
-  (swap! db assoc :path url :loading? true :error nil :menu nil :entries [])
+  (swap! db assoc :path url :loading? true :error nil :menu nil
+                  :entries [] :attached {})
   (-> (pod/list-container+ url)
       (p/then (fn [entries]
                 ;; a slower listing for a container we've since left
@@ -163,6 +166,21 @@
                            " — access is granted per resource, so a folder
                              shared with you opens directly by its URL even
                              when the folder above it doesn't."))))))))
+
+(defn- load-attached!
+  "One HEAD per entry, because a container lists its children but not
+   what's attached to them. Rows fill in as they arrive rather than
+   waiting for the slowest."
+  []
+  (doseq [{:keys [url]} (:entries @db)
+          :when (not (contains? (:attached @db) url))]
+    (p/then (pod/attached+ url)
+            #(swap! db assoc-in [:attached url] (or % {})))))
+
+(defn toggle-attached! []
+  (let [on? (not (:show-attached? @db))]
+    (swap! db assoc :show-attached? on?)
+    (when on? (load-attached!))))
 
 (defn refresh! []
   (when-let [path (:path @db)]

@@ -106,6 +106,20 @@
 ;; ---------------------------------------------------------------------------
 ;; Reading one resource
 
+(defn parse-links
+  "A Link header into {rel url}. Auxiliary resources are advertised here
+   and nowhere else — never construct their URLs: <name>.acl and
+   <name>.meta are one server's convention, and ESS names its access
+   control resources differently."
+  [header]
+  (when header
+    (into {}
+          (for [part (str/split header #",\s*(?=<)")
+                :let [[_ url] (re-find #"<([^>]*)>" part)
+                      [_ rel] (re-find #"rel=\"?([^\";]+)\"?" part)]
+                :when (and url rel)]
+            [rel url]))))
+
 (defn- headers->map [^js headers]
   (let [acc (atom {})]
     (.forEach headers (fn [v k] (swap! acc assoc k v)))
@@ -139,7 +153,8 @@
                 :content-type content-type
                 :headers headers
                 ;; kept for If-Match when saving an edit
-                :etag (get headers "etag")}]
+                :etag (get headers "etag")
+                :links (parse-links (get headers "link"))}]
     (cond
       (not (.-ok resp))
       (p/let [body (.text resp)] (assoc base :text body))
@@ -152,6 +167,18 @@
         (assoc base
                :object-url (js/URL.createObjectURL blob)
                :image? (image? content-type))))))
+
+(defn attached+
+  "The auxiliary resources hanging off a resource — its access control
+   resource, its description — as {rel url}.
+
+   Costs a HEAD per resource, because containers list their children but
+   not the things attached to those children. That's why revealing them
+   is a deliberate act rather than the default."
+  [url]
+  (-> (p/let [resp (auth/auth-fetch url #js {:method "HEAD" :cache "no-cache"})]
+        (parse-links (.get (.-headers resp) "link")))
+      (p/catch (fn [_] nil))))
 
 (defn release-object-url!
   "Free an :object-url from read-resource+."
