@@ -132,6 +132,22 @@
 ;; ---------------------------------------------------------------------------
 ;; Feed
 
+(defn- attachment-name [url]
+  (-> url (str/split #"[?#]") first (str/split #"/") last
+      (as-> s (try (js/decodeURIComponent s) (catch :default _ s)))))
+
+(defn- broken-attachment [url code]
+  [:div.attachment.attachment-broken
+   [:p.why
+    (case code
+      404 "This attachment is missing. The post still points at where it
+           used to be — most likely it was moved or renamed."
+      (401 403) "You don't have access to this attachment."
+      nil "This attachment couldn't be fetched."
+      (str "This attachment couldn't be loaded (" code ")."))]
+   [:a {:href url :target "_blank" :rel "noopener" :title url}
+    (attachment-name url)]])
+
 (defn- authed-media
   "Renders one piece of pod media. The bytes are fetched with the
    session's credentials (a bare src= would be an unauthenticated
@@ -162,7 +178,12 @@
                                       (if (= :released (:status @media))
                                         (pod/release-media-url! blob-url)
                                         (reset! media {:status :ready :src blob-url}))))
-                            (p/catch (fn [_] (reset! media {:status :error})))))
+                            (p/catch (fn [e]
+                                       (js/console.warn "Couldn't load attachment" url e)
+                                       (reset! media
+                                               {:status :error
+                                                :code (some-> ^js e .-statusCode)
+                                                :message (some-> ^js e .-message)})))))
                ;; ref callback: React hands us the placeholder node on
                ;; mount and nil on unmount
                watch! (fn [el]
@@ -177,12 +198,15 @@
                                    #js {:rootMargin "400px"})]
                             (reset! observer o)
                             (.observe o el))))]
-    (let [{:keys [status src]} @media]
+    (let [{:keys [status src code]} @media]
       (case status
         (:idle :loading) [:div.attachment.attachment-loading {:ref watch!}]
         :ready (render src)
-        ;; couldn't read it — most likely no access; offer the raw link
-        :error [:a.attachment-link {:href url :target "_blank" :rel "noopener"} url]
+        ;; A failure must not look like a deliberate link. Say what
+        ;; happened: a missing attachment usually means the file moved
+        ;; and the post still names where it used to be, which no amount
+        ;; of retrying will fix.
+        :error [broken-attachment url code]
         nil))
     (finally
       (unwatch!)
@@ -194,7 +218,8 @@
   (let [ext (url-ext url)]
     (cond
       (image-exts ext)
-      [authed-media url (fn [src] [:img.attachment {:src src :alt ""}])]
+      [authed-media url (fn [src] [:img.attachment {:src src
+                                                   :alt (attachment-name url)}])]
 
       (video-exts ext)
       [authed-media url (fn [src] [:video.attachment {:src src :controls true}])]
