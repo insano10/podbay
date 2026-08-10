@@ -22,6 +22,7 @@
 (def solid-TypeRegistration (str solid "TypeRegistration"))
 (def solid-forClass (str solid "forClass"))
 (def solid-instanceContainer (str solid "instanceContainer"))
+(def solid-instance (str solid "instance"))
 
 (def foaf-name (str foaf "name"))
 (def foaf-img (str foaf "img"))

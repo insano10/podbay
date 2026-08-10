@@ -372,11 +372,29 @@ resources live?", never "what's in their `podbay/comms/` folder":
     solid:instanceContainer </podbay/comms/posts/> .
 ```
 
-`pod/posts-container+` resolves that registration and falls back to
-`podbay/comms/posts/` under the storage root when a pod publishes no
-index or no registration for the class. **Reads and writes both go
-through it**, so the app never holds two different ideas of where
-someone's posts are.
+`pod/post-sources+` resolves **every** registration for the class —
+each `solid:instanceContainer` and each `solid:instance`, across all
+matching registrations — falling back to `podbay/comms/posts/` under the
+storage root only when a pod registers nothing at all.
+
+Reading all of them matters, because a type index is a *set of hints,
+not an exhaustive statement*. Several registrations may name the same
+class, typically one per app; a single registration may list several
+containers; and `solid:instance` names an individual document rather
+than a container. Merging them is what lets this feed pick up posts a
+**different** Solid app wrote into its own container, which is the whole
+point of discovery. Posts registered in more than one place are
+deduplicated by their URL.
+
+A write has to choose one, so `pod/write-container+` takes the first
+registered container, else the convention — the same source a reader
+tries first, so a post always lands somewhere its author's own feed
+will find it.
+
+`load-posts+` rejects only when **every** source fails. One unreadable
+source among several shouldn't blank the rest, since another app's
+container may simply be private; but a pod where nothing can be read is
+reported rather than rendered as empty.
 
 Publishing a post registers the container, but only when nothing has
 claimed `as:Note` yet. If another app got there first, the lookup has
@@ -705,17 +723,6 @@ keeping applied consistently.
   publishing a post and sharing it remain two separate acts, and Comms
   gives no hint that what you just wrote is unreadable by the people you
   wrote it for.
-- **Only the first type-index registration for a class is used**, and
-  `solid:instance` is ignored entirely. A type index is a set of hints,
-  not an exhaustive index: several registrations may name the same
-  class — typically one per app — a single registration may carry
-  several `solid:instanceContainer` values, and `solid:instance` points
-  at individual documents rather than containers. `registered-container+`
-  takes the first container it finds, and `getThingAll` ordering isn't
-  guaranteed, so a pod with two registrations for `as:Note` gets one of
-  them arbitrarily. Reading them all and merging would let the feed pick
-  up posts a *different* Solid social app wrote into its own container,
-  which is the whole point of discovery.
 - **No pagination.** Every post from every contact is loaded on refresh,
   and since each post is its own resource, that's one request per post
   (they run in parallel, but the round trips add up). Fine for

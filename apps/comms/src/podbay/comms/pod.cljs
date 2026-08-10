@@ -168,17 +168,28 @@
         (swap! type-index-cache assoc webid ds+)
         ds+)))
 
-(defn- registered-container+
-  "The container registered for `class-iri` in the WebID's public type
-   index, or nil if there's no index or no registration for that class."
+(defn- registrations+
+  "Every place a WebID's public type index says instances of `class-iri`
+   live: containers and individual documents.
+
+   A type index is a set of hints, not an exhaustive statement. Several
+   registrations may name the same class — typically one per app — a
+   single registration may list several containers, and solid:instance
+   points at an individual document rather than a container. Reading all
+   of them is what lets this feed pick up posts some *other* Solid app
+   wrote into its own container, which is the point of discovery."
   [webid class-iri]
   (p/let [ds (type-index+ webid)]
-    (when ds
-      (->> (array-seq (sc/getThingAll ds))
-           (filter #(some #{class-iri}
-                          (array-seq (sc/getUrlAll % v/solid-forClass))))
-           (keep #(sc/getUrl % v/solid-instanceContainer))
-           first))))
+    (if-not ds
+      {:containers [] :instances []}
+      (let [matching (->> (array-seq (sc/getThingAll ds))
+                          (filter #(some #{class-iri}
+                                         (array-seq (sc/getUrlAll % v/solid-forClass)))))
+            urls-of (fn [predicate]
+                      (into [] (distinct)
+                            (mapcat #(array-seq (sc/getUrlAll % predicate)) matching)))]
+        {:containers (urls-of v/solid-instanceContainer)
+         :instances (urls-of v/solid-instance)}))))
 
 (defn forget-caches!
   "Drop cached pod lookups — call on logout, since the next session may
@@ -188,14 +199,25 @@
   (reset! alt-profiles-cache {})
   (reset! type-index-cache {}))
 
-(defn- posts-container+
-  "Where this person's posts live: whatever their type index says holds
-   as:Note instances, falling back to our own convention for pods that
-   publish nothing. Reads and writes both resolve through here, so the
-   app never keeps two ideas of where a person's posts are."
+(defn- post-sources+
+  "Everywhere to read this person's posts from — every registered
+   container and document — falling back to our own convention only when
+   their pod registers nothing at all."
   [webid]
-  (p/let [registered (registered-container+ webid v/as-Note)]
-    (or registered
+  (p/let [{:keys [containers instances]} (registrations+ webid v/as-Note)]
+    (if (or (seq containers) (seq instances))
+      {:containers containers :instances instances}
+      (p/let [root (pod-root+ webid)]
+        {:containers [(str root app-path "posts/")] :instances []}))))
+
+(defn- write-container+
+  "Where a *new* post goes. Reading merges every registered source, but
+   a write has to pick one: the first registered container, else the
+   convention. That's the same resolution a reader tries first, so a
+   post always lands somewhere its author's own feed will find it."
+  [webid]
+  (p/let [{:keys [containers]} (registrations+ webid v/as-Note)]
+    (or (first containers)
         (p/let [root (pod-root+ webid)]
           (str root app-path "posts/")))))
 
@@ -277,24 +299,15 @@
      :published (sc/getDatetime thing v/as-published)
      :attachments (vec (array-seq (sc/getUrlAll thing v/as-attachment)))}))
 
-(defn load-posts+
-  "Load all posts from one person's pod, as a vector of post maps.
-
-   Rejects if that pod can't be read. An unreadable pod and an empty one
-   are different facts, and conflating them is how a transient 502 turns
-   into a feed that is simply, silently empty. Keeping one bad contact
-   from breaking the whole feed is the caller's job — see
-   state/fetch-authors! — and it does that without discarding the
-   reason."
-  [webid]
-  (p/let [container (posts-container+ webid)
-          ;; the listing must be current — a post published a moment
-          ;; ago has to appear; the posts themselves may be cached
+(defn- posts-in-container+
+  "Every post in one container. One unreadable post is skipped — it
+   shouldn't hide the rest of someone's feed — but it is logged."
+  [container]
+  (p/let [;; the listing must be current: a post published a moment ago
+          ;; has to appear. The posts themselves may be cached.
           ds (sc/getSolidDataset container (fresh-opts))
           urls (->> (array-seq (sc/getContainedResourceUrlAll ds))
                     (remove #(str/ends-with? % "/")))
-          ;; one unreadable post shouldn't hide the rest of someone's
-          ;; feed, but it is worth knowing about
           datasets (p/all (map #(-> (sc/getSolidDataset % (opts))
                                     (p/catch (fn [e]
                                                (js/console.warn
@@ -305,7 +318,51 @@
          (remove nil?)
          (mapcat #(array-seq (sc/getThingAll %)))
          (keep thing->post)
-         vec)))
+         ;; remember where it came from: with several registered sources
+         ;; merged into one feed, "which container is this from?" stops
+         ;; being obvious from the post itself
+         (map #(assoc % :source container)))))
+
+(defn- posts-in-document+
+  "Posts held directly in one document, for a solid:instance
+   registration — which names a document rather than a container."
+  [url]
+  (p/let [ds (sc/getSolidDataset url (fresh-opts))]
+    (->> (array-seq (sc/getThingAll ds))
+         (keep thing->post)
+         (map #(assoc % :source url)))))
+
+(defn load-posts+
+  "Load all posts from one person's pod, as a vector of post maps,
+   merged across every source their type index registers.
+
+   Rejects only if **every** source failed. An unreadable pod and an
+   empty one are different facts, and conflating them is how a transient
+   502 becomes a silently empty feed. But one unreadable source among
+   several shouldn't blank the rest — another app's container may simply
+   be private — so that is logged and the readable ones still count.
+   Keeping one bad contact from breaking the whole feed is the caller's
+   job; see state/fetch-authors!."
+  [webid]
+  (p/let [{:keys [containers instances]} (post-sources+ webid)
+          attempts (concat (map (fn [c] [c (posts-in-container+ c)]) containers)
+                           (map (fn [i] [i (posts-in-document+ i)]) instances))
+          results (p/all (map (fn [[source p]]
+                                (-> p
+                                    (p/then (fn [posts] {:posts posts}))
+                                    (p/catch (fn [e] {:error e :source source}))))
+                              attempts))]
+    (let [failures (filter :error results)
+          succeeded (remove :error results)]
+      (doseq [{:keys [error source]} failures]
+        (js/console.warn "Couldn't read posts from" source error))
+      (if (and (seq failures) (empty? succeeded))
+        (p/rejected (:error (first failures)))
+        ;; the same post can be registered in more than one place
+        (->> (mapcat :posts succeeded)
+             (reduce (fn [acc post] (assoc acc (:id post) post)) {})
+             vals
+             vec)))))
 
 ;; ---------------------------------------------------------------------------
 ;; Media
@@ -350,14 +407,14 @@
    anything about our folder names.
 
    Only ever adds a registration when the class is unclaimed: if some
-   other app already registered a posts container, posts-container+ has
+   other app already registered a posts container, write-container+ has
    already resolved to theirs and we're writing there, so there is
    nothing to add. Best-effort — a pod with no type index, or one we
    can't write to, keeps working on the convention path."
   [webid container]
   (-> (p/let [ds (type-index+ webid)
-              existing (registered-container+ webid v/as-Note)]
-        (when (and ds (nil? existing))
+              {:keys [containers]} (registrations+ webid v/as-Note)]
+        (when (and ds (empty? containers))
           (p/let [reg (-> (sc/createThing #js {:name "podbay-comms-posts"})
                           (sc/addUrl sv/rdf-type v/solid-TypeRegistration)
                           (sc/addUrl v/solid-forClass v/as-Note)
@@ -387,7 +444,7 @@
   "Upload any media files, then save the post as a new Turtle resource
    named by its timestamp. Resolves when the post is stored."
   [webid content files]
-  (p/let [posts-url (posts-container+ webid)
+  (p/let [posts-url (write-container+ webid)
           media-url (media-container posts-url)
           _ (ensure-container+ posts-url)
           _ (when (seq files) (ensure-container+ media-url))

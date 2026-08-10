@@ -227,7 +227,20 @@
       :else
       [:a.attachment-link {:href url :target "_blank" :rel "noopener"} url])))
 
-(defn- post-card [{:keys [id author content published attachments]}]
+(defn- source-label
+  "A short, recognisable form of the container a post came from — the
+   last couple of path segments, since the origin is already obvious
+   from the author and the full URL is in the tooltip."
+  [url]
+  (try
+    (let [segments (->> (str/split (.-pathname (js/URL. url)) #"/")
+                        (remove str/blank?))]
+      (if (> (count segments) 2)
+        (str "…/" (str/join "/" (take-last 2 segments)))
+        (str/join "/" segments)))
+    (catch :default _ url)))
+
+(defn- post-card [{:keys [id author content published attachments source]}]
   (let [avatar (get-in @state/db [:profiles author :avatar])]
     [:article.post
      [:header
@@ -239,7 +252,9 @@
        [:a.author {:href author :target "_blank" :rel "noopener"
                    :title author}
         (display-name author)]
-       [:time (format-date published)]]]
+       [:time (format-date published)]
+       (when source
+         [:span.origin {:title source} (source-label source)])]]
      (when (seq content)
        (into [:div.content]
              (for [para (str/split-lines content)]
