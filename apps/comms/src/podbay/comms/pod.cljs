@@ -89,6 +89,43 @@
       (p/catch (fn [e]
                  (if (missing? e) nil (p/rejected e))))))
 
+(defonce ^:private alt-profiles-cache (atom {}))
+
+(defn- alt-profiles+
+  "The extended profile documents a WebID links with rdfs:seeAlso.
+
+   ESS keeps the WebID document itself to the bare plumbing — issuer,
+   storage — and puts everything else here, in a document inside the pod
+   whose access the owner controls. CSS-style pods usually put it all in
+   the card, in which case this is empty and costs one lookup, cached."
+  [webid]
+  (or (get @alt-profiles-cache webid)
+      (let [ds+ (-> (p/let [profiles (sc/getProfileAll webid (opts))]
+                      (vec (array-seq (.-altProfileAll ^js profiles))))
+                    (p/catch (fn [e]
+                               ;; frequently unreadable by design — that's
+                               ;; what "private extended profile" means
+                               (js/console.warn "Couldn't read extended profile of" webid e)
+                               [])))]
+        (swap! alt-profiles-cache assoc webid ds+)
+        ds+)))
+
+(defn- profile-url+
+  "Look for `predicate` on the WebID, first in its own document and then
+   in any extended profile it links to. Without the second step an ESS
+   pod can't publish anything discoverable, since the only document it
+   lets you write is the linked one."
+  [webid predicate]
+  (p/let [thing (profile-thing+ webid)
+          direct (when thing (sc/getUrl thing predicate))]
+    (if direct
+      direct
+      (p/let [alts (alt-profiles+ webid)]
+        (some (fn [ds]
+                (when-let [t (sc/getThing ds webid)]
+                  (sc/getUrl t predicate)))
+              alts)))))
+
 (defn pod-root+
   "Resolve the storage root for a WebID via pim:storage in the profile,
    falling back to the WebID's origin (correct for most pod providers).
@@ -120,8 +157,7 @@
    transient failure would read posts from the wrong container."
   [webid]
   (or (get @type-index-cache webid)
-      (let [ds+ (-> (p/let [thing (profile-thing+ webid)
-                            url (when thing (sc/getUrl thing v/solid-publicTypeIndex))]
+      (let [ds+ (-> (p/let [url (profile-url+ webid v/solid-publicTypeIndex)]
                       (when url
                         (-> (sc/getSolidDataset url (opts))
                             (p/catch (fn [e]
@@ -149,6 +185,7 @@
    be a different person."
   []
   (reset! profile-cache {})
+  (reset! alt-profiles-cache {})
   (reset! type-index-cache {}))
 
 (defn- posts-container+
@@ -201,8 +238,7 @@
    readable by us, which is a perfectly ordinary outcome — they're the
    private half by design."
   [webid]
-  (-> (p/let [profiles (sc/getProfileAll webid (opts))
-              alternates (array-seq (.-altProfileAll ^js profiles))]
+  (-> (p/let [alternates (alt-profiles+ webid)]
         (->> alternates
              (keep #(details-of (sc/getThing % webid)))
              (filter :name)
