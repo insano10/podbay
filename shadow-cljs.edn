@@ -43,8 +43,8 @@
    {:closure-defines
     {podbay.shared.auth/storage-prefix "podbayComms:"
      podbay.shared.auth/client-name "Podbay Comms"
-     #_podbay.shared.auth/client-id
-     #_"https://insano10.github.io/podbay/comms/clientid-dev.jsonld"}}}
+     podbay.shared.auth/client-id
+     "https://insano10.github.io/podbay/comms/clientid-dev.jsonld"}}}
 
   ;; The pod file browser, published at /airlock/. Shares only
   ;; podbay.shared.*, and has its own client identity so a consent screen
@@ -66,5 +66,5 @@
    {:closure-defines
     {podbay.shared.auth/storage-prefix "podbayAirlock:"
      podbay.shared.auth/client-name "Podbay Airlock"
-     #_podbay.shared.auth/client-id
-     #_"https://insano10.github.io/podbay/airlock/clientid-dev.jsonld"}}}}}
+     podbay.shared.auth/client-id
+     "https://insano10.github.io/podbay/airlock/clientid-dev.jsonld"}}}}}

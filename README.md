@@ -592,17 +592,16 @@ The ID used at build time comes from a `goog-define` in `auth.cljs`, set
 per build in `shadow-cljs.edn`:
 
 - `npm run release` → the published identity.
-- `npm run dev` → **currently dynamic registration.** Both `:dev` blocks
-  in `shadow-cljs.edn` are `#_`-disabled because the documents they name
-  live at the restructured `/comms/` and `/airlock/` URLs, which don't
-  exist until a Pages deploy publishes them. Re-enable both after the
-  first successful deploy of that layout.
+- `npm run dev` → the development identity, whose redirect URIs are
+  localhost only.
 
-A `client_id` the provider cannot dereference doesn't degrade — it fails
+**A client document must be live before any build points at it.** A
+`client_id` the provider can't dereference doesn't degrade — it fails
 the whole login. solidcommunity.net answers **500** at its authorization
 endpoint and leaves the browser on its own error page, which reads like
-a server fault rather than a dangling URL. So a client document must be
-live *before* any build points at it.
+a server fault rather than a dangling URL. So when these URLs change,
+deploy first and repoint the `:dev` defines after; `#_` on the
+`client-id` pair falls back to dynamic registration meanwhile.
 
 Both documents are fetched from the published site by the *identity
 provider*, never by the browser — which is why even the localhost-only
