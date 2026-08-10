@@ -234,6 +234,17 @@ What it does today:
   constructed. `<name>.acl` and `<name>.meta` are one server's
   convention; ESS names its access control resources differently, so
   guessing would work on one pod and quietly fail on another.
+- **Rename and move**, from the context menu — edit the last segment to
+  rename, or the path to relocate. Folders move everything inside them,
+  depth-first.
+
+  There is no `MOVE` in Solid, so it's a copy followed by a delete, in
+  that order deliberately: a failure part way leaves items in both
+  places rather than losing any. Two things don't come along, and the
+  dialog says so before you commit — **sharing doesn't follow** (access
+  belongs to a URL, so the copy inherits the destination's), and
+  **nothing referencing the old URL is rewritten**, including type index
+  registrations and posts that link media absolutely.
 - **Right-click** any row for open, copy URL, open raw, and delete.
   Delete asks for confirmation naming the resource, and containers use a
   different call from files — most servers refuse to delete a container

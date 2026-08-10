@@ -391,8 +391,42 @@
                                  (js/window.open (:url entry) "_blank" "noopener")
                                  (state/hide-menu!))}
             "Open raw in new tab"]]
+      [:li [:button {:on-click #(state/ask-move! entry)} "Rename or move…"]]
       [:li.sep]
       [:li [:button.danger {:on-click #(state/ask-delete! entry)} "Delete…"]]]]))
+
+(defn- move-dialog []
+  (when-let [{:keys [entry target]} (:moving @state/db)]
+    (let [busy? (:move-busy? @state/db)
+          {:keys [name container?]} entry]
+      [:div.modal-backdrop {:on-click state/cancel-move!}
+       [:div.modal {:on-click (fn [^js e] (.stopPropagation e))}
+        [:h2 "Rename or move " (if container? "folder" "file")]
+        [:p [:strong name]]
+        [:label {:for "move-target"} "New URL"]
+        [:input#move-target
+         {:type "url"
+          :value target
+          :spell-check false
+          :disabled busy?
+          :on-change #(state/update-move-target! (.. % -target -value))
+          :on-key-down #(when (= "Enter" (.-key %)) (state/confirm-move!))}]
+        [:p.hint "Edit the last segment to rename, or the path to move it
+                  elsewhere. Folders move everything inside them."]
+        [:ul.caveats
+         [:li [:strong "Sharing does not follow."] " Access belongs to a
+               URL, so the copy inherits whatever the destination gives
+               it — check its sharing afterwards."]
+         [:li [:strong "Nothing pointing at the old URL is updated."]
+              " Type index registrations, and posts referencing media by
+                absolute URL, will still name the old location."]
+         [:li "Each item is copied before the original is removed, so a
+               failure part way leaves things in both places rather than
+               losing them."]]
+        [:div.modal-actions
+         [:button {:on-click state/cancel-move! :disabled busy?} "Cancel"]
+         [:button.primary {:on-click state/confirm-move! :disabled busy?}
+          (if busy? "Moving…" "Move")]]]])))
 
 (defn- confirm-public []
   (when-let [access (:confirm-public @state/db)]
@@ -479,4 +513,5 @@
         [viewer]]
        [context-menu]
        [confirm-delete]
-       [confirm-public]])))
+       [confirm-public]
+       [move-dialog]])))

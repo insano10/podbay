@@ -316,3 +316,57 @@
   (if container?
     (sc/deleteContainer url (opts))
     (sc/deleteFile url (opts))))
+
+;; ---------------------------------------------------------------------------
+;; Moving
+;;
+;; There is no MOVE in Solid: a move is a copy followed by a delete, in
+;; that order deliberately — if the copy fails, the original is still
+;; there. The cost is that an interrupted move of a folder leaves some
+;; items in both places rather than losing any.
+;;
+;; Two things do NOT come along, and both matter enough that the UI says
+;; so before you commit: a resource's access control belongs to its URL,
+;; so the copy inherits whatever the destination gives it; and nothing
+;; that references the old URL is rewritten.
+
+(declare move+)
+
+(defn- move-file+ [from to]
+  (p/let [resp (auth/auth-fetch from #js {:cache "no-store"})
+          _ (when-not (.-ok resp)
+              (p/rejected (js/Error. (str "Couldn't read " from ": " (.-status resp)))))
+          blob (.blob resp)
+          content-type (or (.get (.-headers resp) "content-type")
+                           "application/octet-stream")
+          init (doto #js {:method "PUT"
+                          :headers #js {"Content-Type" content-type}}
+                 (aset "body" blob))
+          put (auth/auth-fetch to init)
+          _ (when-not (.-ok put)
+              (p/rejected (js/Error. (str "Couldn't write " to ": " (.-status put)))))]
+    ;; only now is it safe to let go of the original
+    (sc/deleteFile from (opts))))
+
+(defn- move-container+ [from to]
+  (p/let [_ (-> (sc/createContainerAt to (opts))
+                (p/catch (fn [e]
+                           ;; already there is the state we want
+                           (if (#{409 412} (some-> ^js e .-statusCode))
+                             nil
+                             (p/rejected e)))))
+          entries (list-container+ from)
+          _ (p/all (mapv (fn [{:keys [name container?] :as child}]
+                           (move+ child (str to (js/encodeURIComponent name)
+                                             (when container? "/"))))
+                         entries))]
+    ;; empty at last, so the server will accept the delete
+    (sc/deleteContainer from (opts))))
+
+(defn move+
+  "Move or rename a resource. Folders move their whole contents,
+   depth-first, each child copied before its original is removed."
+  [{:keys [url container?]} target]
+  (if container?
+    (move-container+ url target)
+    (move-file+ url target)))

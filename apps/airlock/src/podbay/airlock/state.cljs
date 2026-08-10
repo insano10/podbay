@@ -26,6 +26,8 @@
            :opening nil         ; its url while the fetch is in flight
            :menu nil            ; {:x :y :entry} for the context menu
            :confirm nil         ; entry awaiting delete confirmation
+           :moving nil          ; {:entry :target} while renaming/moving
+           :move-busy? false
            :error nil}))
 
 (defn- describe
@@ -145,6 +147,8 @@
 ;; ---------------------------------------------------------------------------
 ;; Navigating
 
+(declare load-attached!)
+
 (defn open-container! [url]
   (close-file!)
   (swap! db assoc :path url :loading? true :error nil :menu nil
@@ -154,7 +158,9 @@
                 ;; a slower listing for a container we've since left
                 ;; must not replace the one on screen
                 (when (= url (:path @db))
-                  (swap! db assoc :entries entries :loading? false))))
+                  (swap! db assoc :entries entries :loading? false)
+                  ;; a new folder needs its own attachments looked up
+                  (when (:show-attached? @db) (load-attached!)))))
       (p/catch (fn [e]
                  (when (= url (:path @db))
                    (set-error!
@@ -167,7 +173,7 @@
                              shared with you opens directly by its URL even
                              when the folder above it doesn't."))))))))
 
-(defn- load-attached!
+(defn load-attached!
   "One HEAD per entry, because a container lists its children but not
    what's attached to them. Rows fill in as they arrive rather than
    waiting for the slowest."
@@ -299,6 +305,48 @@
 
 (defn hide-menu! []
   (swap! db assoc :menu nil))
+
+(defn ask-move! [entry]
+  (swap! db assoc :moving {:entry entry :target (:url entry)} :menu nil))
+
+(defn update-move-target! [target]
+  (swap! db assoc-in [:moving :target] target))
+
+(defn cancel-move! []
+  (swap! db assoc :moving nil))
+
+(defn- normalise-target
+  "A container's URL must end in a slash — servers treat the two forms as
+   different resources, and creating one without would make a file."
+  [target container?]
+  (let [t (str/trim target)]
+    (if (and container? (not (str/ends-with? t "/")))
+      (str t "/")
+      t)))
+
+(defn confirm-move! []
+  (when-let [{:keys [entry target]} (:moving @db)]
+    (let [target (normalise-target target (:container? entry))]
+      (if (or (str/blank? target) (= target (:url entry)))
+        (cancel-move!)
+        (do
+          (swap! db assoc :move-busy? true :error nil)
+          (-> (pod/move+ entry target)
+              (p/then (fn [_]
+                        (swap! db assoc :move-busy? false :moving nil)
+                        (when (= (:url entry) (:url (:open @db)))
+                          (close-file!))
+                        (refresh!)))
+              (p/catch (fn [e]
+                         (swap! db assoc :move-busy? false :moving nil)
+                         ;; a copy-then-delete that failed part way leaves
+                         ;; items in both places — say so, and reload so
+                         ;; what's on screen matches the pod
+                         (refresh!)
+                         (set-error!
+                          (str (describe (str "Couldn't move " (:name entry)) e)
+                               " — nothing was deleted before being copied, so"
+                               " anything already moved now exists in both places."))))))))))
 
 (defn ask-delete! [entry]
   (swap! db assoc :confirm entry :menu nil))
