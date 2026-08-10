@@ -2,15 +2,15 @@
   "@context": [
     "https://www.w3.org/ns/solid/oidc-context.jsonld"
   ],
-  "client_id": "https://insano10.github.io/solid-social/feed/clientid.jsonld",
+  "client_id": "https://insano10.github.io/podbay/feed/clientid.jsonld",
   "client_name": "Solid Social",
-  "client_uri": "https://insano10.github.io/solid-social/feed/",
+  "client_uri": "https://insano10.github.io/podbay/feed/",
   "redirect_uris": [
-    "https://insano10.github.io/solid-social/feed/",
-    "https://insano10.github.io/solid-social/feed/index.html"
+    "https://insano10.github.io/podbay/feed/",
+    "https://insano10.github.io/podbay/feed/index.html"
   ],
   "post_logout_redirect_uris": [
-    "https://insano10.github.io/solid-social/feed/"
+    "https://insano10.github.io/podbay/feed/"
   ],
   "scope": "openid profile offline_access webid",
   "grant_types": [

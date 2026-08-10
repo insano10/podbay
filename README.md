@@ -1,18 +1,29 @@
-# Solid Social
+# Podbay
 
-A lightweight social feed over [Solid](https://solidproject.org/) pods.
-You write posts (text plus photos/videos) into **your own pod**, follow
-friends by their WebIDs, and see everyone's posts merged into one
-chronological feed.
+A suite of apps built on [Solid](https://solidproject.org/) pods — your
+data, in storage you control, read and written straight from the browser.
 
-There is deliberately no backend: this is a static site. Authentication
+| App | | |
+|---|---|---|
+| **Solid Social** | `/feed/` | A social feed assembled from the pods of the people you follow |
+| **Pod Browser** | `/browser/` | A file browser for any Solid pod |
+
+There is deliberately no backend: these are static sites. Authentication
 (Solid-OIDC) and all data access happen in the browser, directly against
-each person's pod. No ads, no algorithm, no tracking — the app is just a
-view over data you and your friends chose to link.
+each person's pod. No ads, no algorithm, no tracking — nothing here is a
+view over anything but data you and your friends chose to link.
 
 Built with [ClojureScript](https://clojurescript.org/),
 [shadow-cljs](https://shadow-cljs.github.io/docs/UsersGuide.html) and
 [Reagent](https://reagent-project.github.io/).
+
+## Solid Social
+
+Write posts (text plus photos and videos) into **your own pod**, follow
+friends by their WebIDs, and see everyone's posts merged into one
+chronological feed. How it finds and stores that data is described under
+[How data is stored](#how-data-is-stored) below; the pod browser has its
+own section further down.
 
 ## Repository layout
 
@@ -119,7 +130,7 @@ it to GitHub Pages. `apps/*/public/js/` is gitignored — the site is
 compiled in CI, never committed.
 
 ```
-https://insano10.github.io/solid-social/          landing page
+https://insano10.github.io/podbay/          landing page
                                        /feed/     Solid Social
                                        /browser/   Pod Browser
 ```
@@ -135,7 +146,7 @@ identity at login. Worth re-checking if the hosting ever changes, since
 a document served as `text/plain` may be rejected:
 
 ```sh
-curl -sI https://insano10.github.io/solid-social/feed/clientid.jsonld | grep -i content-type
+curl -sI https://insano10.github.io/podbay/feed/clientid.jsonld | grep -i content-type
 ```
 
 ## Pod Browser
@@ -545,7 +556,7 @@ trusting any of this:
 1. That the document is served as `application/ld+json`. GitHub Pages
    may not map the `.jsonld` extension and could serve it as plain
    text, which some providers reject:
-   `curl -sI https://insano10.github.io/solid-social/feed/clientid.jsonld | grep -i content-type`
+   `curl -sI https://insano10.github.io/podbay/feed/clientid.jsonld | grep -i content-type`
 2. That `redirect_uris` matches the deployed URL **exactly** — the
    provider does a literal string comparison. `login!` builds its
    redirect from `origin + pathname` for this reason, so a stray query

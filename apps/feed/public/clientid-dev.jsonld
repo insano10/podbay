@@ -2,9 +2,9 @@
   "@context": [
     "https://www.w3.org/ns/solid/oidc-context.jsonld"
   ],
-  "client_id": "https://insano10.github.io/solid-social/feed/clientid-dev.jsonld",
+  "client_id": "https://insano10.github.io/podbay/feed/clientid-dev.jsonld",
   "client_name": "Solid Social (local development)",
-  "client_uri": "https://github.com/insano10/solid-social",
+  "client_uri": "https://github.com/insano10/podbay",
   "redirect_uris": [
     "http://localhost:8080/",
     "http://localhost:8080/index.html"

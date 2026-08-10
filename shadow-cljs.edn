@@ -25,7 +25,7 @@
    :release
    {:closure-defines
     {solid-shared.auth/client-id
-     "https://insano10.github.io/solid-social/feed/clientid.jsonld"
+     "https://insano10.github.io/podbay/feed/clientid.jsonld"
      solid-shared.auth/storage-prefix "solidSocialFeed:"}}
 
    ;; Local development uses a separate published identity whose
@@ -42,7 +42,7 @@
    {:closure-defines
     {solid-shared.auth/storage-prefix "solidSocialFeed:"
      #_solid-shared.auth/client-id
-     #_"https://insano10.github.io/solid-social/feed/clientid-dev.jsonld"}}}
+     #_"https://insano10.github.io/podbay/feed/clientid-dev.jsonld"}}}
 
   ;; The pod file browser, published at /browser/. Shares only
   ;; solid-shared.*, and has its own client identity so a consent screen
@@ -56,11 +56,11 @@
    :release
    {:closure-defines
     {solid-shared.auth/client-id
-     "https://insano10.github.io/solid-social/browser/clientid.jsonld"
+     "https://insano10.github.io/podbay/browser/clientid.jsonld"
      solid-shared.auth/storage-prefix "podBrowser:"}}
 
    :dev
    {:closure-defines
     {solid-shared.auth/storage-prefix "podBrowser:"
      #_solid-shared.auth/client-id
-     #_"https://insano10.github.io/solid-social/browser/clientid-dev.jsonld"}}}}}
+     #_"https://insano10.github.io/podbay/browser/clientid-dev.jsonld"}}}}}

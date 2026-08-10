@@ -1,8 +1,8 @@
 {
-  "name": "solid-social",
+  "name": "podbay",
   "version": "0.1.0",
   "private": true,
-  "description": "A lightweight, static social feed over Solid pods",
+  "description": "A suite of apps built on Solid pods",
   "scripts": {
     "dev": "shadow-cljs watch feed browser",
     "release": "shadow-cljs release feed browser",
