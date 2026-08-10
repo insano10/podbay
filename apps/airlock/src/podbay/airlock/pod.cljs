@@ -362,6 +362,31 @@
         (p/rejected (js/Error. (str (.-status resp)
                                     (when (seq body) (str " — " body)))))))))
 
+(defn upload-file+
+  "Store a picked file as a resource, bytes as-is.
+
+   The browser usually knows the content type from the file itself,
+   which beats guessing; fall back to the extension when it doesn't, and
+   to octet-stream when even that fails — better an honest 'unknown
+   bytes' than a wrong type a pod will faithfully serve forever."
+  [url ^js file]
+  (p/let [declared (.-type file)
+          content-type (cond
+                         (seq declared) declared
+                         :else (let [guessed (content-type-for (.-name file))]
+                                 (if (= guessed "text/plain")
+                                   "application/octet-stream"
+                                   guessed)))
+          init (doto #js {:method "PUT"
+                          :headers #js {"Content-Type" content-type}}
+                 (aset "body" file))
+          resp (auth/auth-fetch url init)]
+    (if (.-ok resp)
+      resp
+      (p/let [body (.text resp)]
+        (p/rejected (js/Error. (str (.-name file) ": " (.-status resp)
+                                    (when (seq body) (str " — " body)))))))))
+
 (defn create-container+ [url]
   (sc/createContainerAt url (opts)))
 

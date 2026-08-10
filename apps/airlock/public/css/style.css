@@ -494,3 +494,10 @@ ul.caveats li { margin-bottom: 0.3rem; }
   border: 1px solid var(--border); border-radius: 0.375rem;
   background: var(--bg); color: var(--text);
 }
+
+label.upload {
+  display: inline-block; cursor: pointer; font-size: 0.78rem;
+  color: var(--text-muted); padding: 0.25rem 0.5rem; border-radius: 0.375rem;
+}
+label.upload:hover { background: var(--surface-2); color: var(--text); }
+label.upload input[type="file"] { display: none; }

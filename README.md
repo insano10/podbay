@@ -240,6 +240,12 @@ What it does today:
   constructed. `<name>.acl` and `<name>.meta` are one server's
   convention; ESS names its access control resources differently, so
   guessing would work on one pod and quietly fail on another.
+- **Upload**, from the same toolbar — the browser's own content type is
+  used where it has one, since that beats guessing from an extension,
+  falling back to the extension and then to `application/octet-stream`.
+  A pod serves whatever type you declare, forever, so an honest "unknown
+  bytes" beats a confident wrong answer. Names already present are
+  skipped and reported rather than replaced.
 - **New file and folder**, from the toolbar above the listing. A new
   file is created empty and opened straight into the editor, with its
   content type guessed from the extension — a pod stores whatever you

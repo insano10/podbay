@@ -26,7 +26,8 @@
            :opening nil         ; its url while the fetch is in flight
            :menu nil            ; {:x :y :entry} for the context menu
            :confirm nil         ; entry awaiting delete confirmation
-           :creating nil        ; {:kind :file|:folder :name ""} 
+           :creating nil        ; {:kind :file|:folder :name ""}
+           :uploading nil       ; how many files are in flight
            :moving nil          ; {:entry :target} while renaming/moving
            :move-busy? false
            :error nil}))
@@ -307,6 +308,35 @@
 
 (defn hide-menu! []
   (swap! db assoc :menu nil))
+
+(defn upload-files!
+  "Upload picked files into the folder being viewed."
+  [file-list]
+  (let [path (:path @db)
+        files (vec (array-seq file-list))
+        here (set (map :name (:entries @db)))
+        clashes (filter #(here (.-name ^js %)) files)
+        fresh (remove #(here (.-name ^js %)) files)]
+    ;; a PUT over an existing name replaces it without a word, so don't
+    (when (seq clashes)
+      (set-error!
+       (str "Skipped " (str/join ", " (map #(.-name ^js %) clashes))
+            " — already here. Uploading would have replaced them silently;"
+            " rename or delete first.")))
+    (when (seq fresh)
+      (swap! db assoc :uploading (count fresh))
+      (-> (p/all (mapv (fn [^js f]
+                         (pod/upload-file+
+                          (str path (js/encodeURIComponent (.-name f))) f))
+                       fresh))
+          (p/then (fn [_]
+                    (swap! db assoc :uploading nil)
+                    (reload-listing!)))
+          (p/catch (fn [e]
+                     (swap! db assoc :uploading nil)
+                     ;; some may have landed before the failure
+                     (reload-listing!)
+                     (set-error! (describe "Couldn't upload" e))))))))
 
 (defn ask-new! [kind]
   (swap! db assoc :creating {:kind kind :name ""} :menu nil))

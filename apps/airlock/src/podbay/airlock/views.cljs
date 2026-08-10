@@ -111,6 +111,21 @@
           [:span.name (pod/entry-name target)]
           [:span.rel (if (= rel "acl") " access control" " description")]]]))))
 
+(defn- upload-control []
+  ;; bumping the key remounts the input, which is the only reliable way
+  ;; to clear it — otherwise picking the same file twice does nothing
+  (r/with-let [input-key (r/atom 0)]
+    (let [uploading (:uploading @state/db)]
+      [:label.upload {:title "Upload files into this folder"}
+       [:input {:key @input-key
+                :type "file"
+                :multiple true
+                :disabled (boolean uploading)
+                :on-change (fn [^js e]
+                             (state/upload-files! (.. e -target -files))
+                             (swap! input-key inc))}]
+       (if uploading (str "Uploading " uploading "…") "↑ Upload")])))
+
 (defn- listing []
   (let [{:keys [entries loading? path show-attached?]} @state/db]
     [:div.listing
@@ -119,6 +134,7 @@
                        :title "Create an empty file here"} "+ File"]
       [:button.subtle {:on-click #(state/ask-new! :folder)
                        :title "Create a folder here"} "+ Folder"]
+      [upload-control]
       [:span.tool-sep]
       [:label.reveal
        [:input {:type "checkbox"
