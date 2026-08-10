@@ -2,15 +2,15 @@
   "@context": [
     "https://www.w3.org/ns/solid/oidc-context.jsonld"
   ],
-  "client_id": "https://insano10.github.io/podbay/browser/clientid.jsonld",
-  "client_name": "Pod Browser",
-  "client_uri": "https://insano10.github.io/podbay/browser/",
+  "client_id": "https://insano10.github.io/podbay/airlock/clientid.jsonld",
+  "client_name": "Podbay Airlock",
+  "client_uri": "https://insano10.github.io/podbay/airlock/",
   "redirect_uris": [
-    "https://insano10.github.io/podbay/browser/",
-    "https://insano10.github.io/podbay/browser/index.html"
+    "https://insano10.github.io/podbay/airlock/",
+    "https://insano10.github.io/podbay/airlock/index.html"
   ],
   "post_logout_redirect_uris": [
-    "https://insano10.github.io/podbay/browser/"
+    "https://insano10.github.io/podbay/airlock/"
   ],
   "scope": "openid profile offline_access webid",
   "grant_types": [

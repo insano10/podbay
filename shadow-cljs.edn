@@ -7,16 +7,16 @@
  ;; share one session: whichever loads second silently re-authenticates
  ;; using the *other* app's stored redirect URL and lands the user
  ;; there. Separate ports give each its own storage.
- :dev-http {8080 "apps/feed/public"
-            8081 "apps/browser/public"}
+ :dev-http {8080 "apps/comms/public"
+            8081 "apps/airlock/public"}
 
  :builds
- {;; The social feed, published at /feed/
-  :feed
+ {;; The social feed, published at /comms/
+  :comms
   {:target :browser
-   :output-dir "apps/feed/public/js"
+   :output-dir "apps/comms/public/js"
    :asset-path "js"
-   :modules {:main {:init-fn solid-social.core/init}}
+   :modules {:main {:init-fn podbay.comms.core/init}}
 
    ;; The published app identifies itself with the client identifier
    ;; document beside it, so it presents a stable identity instead of
@@ -24,9 +24,10 @@
    ;; identity" in the README.
    :release
    {:closure-defines
-    {solid-shared.auth/client-id
-     "https://insano10.github.io/podbay/feed/clientid.jsonld"
-     solid-shared.auth/storage-prefix "solidSocialFeed:"}}
+    {podbay.shared.auth/client-id
+     "https://insano10.github.io/podbay/comms/clientid.jsonld"
+     podbay.shared.auth/storage-prefix "podbayComms:"
+     podbay.shared.auth/client-name "Podbay Comms"}}
 
    ;; Local development uses a separate published identity whose
    ;; redirect URIs are localhost only, so the real app's identity never
@@ -40,27 +41,30 @@
    ;; meanwhile. Re-enable it, and the browser's, after a deploy.
    :dev
    {:closure-defines
-    {solid-shared.auth/storage-prefix "solidSocialFeed:"
-     #_solid-shared.auth/client-id
-     #_"https://insano10.github.io/podbay/feed/clientid-dev.jsonld"}}}
+    {podbay.shared.auth/storage-prefix "podbayComms:"
+     podbay.shared.auth/client-name "Podbay Comms"
+     #_podbay.shared.auth/client-id
+     #_"https://insano10.github.io/podbay/comms/clientid-dev.jsonld"}}}
 
-  ;; The pod file browser, published at /browser/. Shares only
-  ;; solid-shared.*, and has its own client identity so a consent screen
+  ;; The pod file browser, published at /airlock/. Shares only
+  ;; podbay.shared.*, and has its own client identity so a consent screen
   ;; names what is actually asking for access.
-  :browser
+  :airlock
   {:target :browser
-   :output-dir "apps/browser/public/js"
+   :output-dir "apps/airlock/public/js"
    :asset-path "js"
-   :modules {:main {:init-fn pod-browser.core/init}}
+   :modules {:main {:init-fn podbay.airlock.core/init}}
 
    :release
    {:closure-defines
-    {solid-shared.auth/client-id
-     "https://insano10.github.io/podbay/browser/clientid.jsonld"
-     solid-shared.auth/storage-prefix "podBrowser:"}}
+    {podbay.shared.auth/client-id
+     "https://insano10.github.io/podbay/airlock/clientid.jsonld"
+     podbay.shared.auth/storage-prefix "podbayAirlock:"
+     podbay.shared.auth/client-name "Podbay Airlock"}}
 
    :dev
    {:closure-defines
-    {solid-shared.auth/storage-prefix "podBrowser:"
-     #_solid-shared.auth/client-id
-     #_"https://insano10.github.io/podbay/browser/clientid-dev.jsonld"}}}}}
+    {podbay.shared.auth/storage-prefix "podbayAirlock:"
+     podbay.shared.auth/client-name "Podbay Airlock"
+     #_podbay.shared.auth/client-id
+     #_"https://insano10.github.io/podbay/airlock/clientid-dev.jsonld"}}}}}

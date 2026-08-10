@@ -1,4 +1,4 @@
-(ns solid-shared.vocab
+(ns podbay.shared.vocab
   "RDF terms that aren't specific to either app — the generic web-of-data
    and LDP layer that anything talking to a pod needs. App-specific
    vocabularies (ActivityStreams, FOAF, vCard) live with the app that

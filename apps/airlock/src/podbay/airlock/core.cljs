@@ -1,7 +1,7 @@
-(ns solid-social.core
-  (:require [reagent.dom.client :as rdc]
-            [solid-social.state :as state]
-            [solid-social.views :as views]))
+(ns podbay.airlock.core
+  (:require [podbay.airlock.state :as state]
+            [podbay.airlock.views :as views]
+            [reagent.dom.client :as rdc]))
 
 (defonce root
   (rdc/create-root (js/document.getElementById "app")))

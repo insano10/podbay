@@ -1,4 +1,4 @@
-(ns pod-browser.pod
+(ns podbay.airlock.pod
   "Reading a pod as if it were a filesystem.
 
    This is the only namespace here that touches JS objects; everything
@@ -12,8 +12,8 @@
   (:require ["@inrupt/solid-client" :as sc]
             [clojure.string :as str]
             [promesa.core :as p]
-            [solid-shared.auth :as auth]
-            [solid-shared.vocab :as v]))
+            [podbay.shared.auth :as auth]
+            [podbay.shared.vocab :as v]))
 
 (defn- opts [] #js {:fetch auth/auth-fetch})
 

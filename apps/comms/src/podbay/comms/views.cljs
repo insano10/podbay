@@ -1,11 +1,11 @@
-(ns solid-social.views
+(ns podbay.comms.views
   "Reagent components. Everything renders from the state/db atom;
-   user actions call functions in solid-social.state."
+   user actions call functions in podbay.comms.state."
   (:require [clojure.string :as str]
             [promesa.core :as p]
             [reagent.core :as r]
-            [solid-social.pod :as pod]
-            [solid-social.state :as state]))
+            [podbay.comms.pod :as pod]
+            [podbay.comms.state :as state]))
 
 ;; ---------------------------------------------------------------------------
 ;; Helpers
@@ -41,7 +41,7 @@
 (defn login-view []
   (r/with-let [issuer (r/atom "https://solidcommunity.net")]
     [:div.login
-     [:h1 "Solid Social"]
+     [:h1 "Comms"]
      [:p.tagline
       "A feed of the people you choose, from data they own. "
       "No server, no ads, no tracking — this page talks directly to Solid pods."]
@@ -262,7 +262,7 @@
 (defn- header []
   (let [{:keys [webid loading-feed?]} @state/db]
     [:header.app-header
-     [:h1 "Solid Social"]
+     [:h1 "Comms"]
      [:div.session
       [:a {:href webid :target "_blank" :rel "noopener" :title webid}
        (display-name webid)]

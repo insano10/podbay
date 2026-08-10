@@ -71,9 +71,9 @@ jobs:
       - name: Assemble site
         run: |
           mkdir -p dist
-          cp site/index.html dist/
-          cp -R apps/feed/public    dist/feed
-          cp -R apps/browser/public dist/browser
+          cp site/index.html site/icon.svg dist/
+          cp -R apps/comms/public   dist/comms
+          cp -R apps/airlock/public dist/airlock
           find dist -maxdepth 2 -name index.html -o -name 'clientid*.jsonld' | sort
 
       - uses: actions/upload-pages-artifact@v3

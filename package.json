@@ -4,9 +4,9 @@
   "private": true,
   "description": "A suite of apps built on Solid pods",
   "scripts": {
-    "dev": "shadow-cljs watch feed browser",
-    "release": "shadow-cljs release feed browser",
-    "repl": "shadow-cljs cljs-repl feed"
+    "dev": "shadow-cljs watch comms airlock",
+    "release": "shadow-cljs release comms airlock",
+    "repl": "shadow-cljs cljs-repl comms"
   },
   "dependencies": {
     "@inrupt/solid-client": "^3.0.0",

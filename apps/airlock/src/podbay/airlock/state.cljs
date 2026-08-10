@@ -1,11 +1,11 @@
-(ns pod-browser.state
+(ns podbay.airlock.state
   "One Reagent atom holds the whole browser; the functions below are the
    only things that change it."
   (:require [clojure.string :as str]
             [promesa.core :as p]
-            [pod-browser.pod :as pod]
+            [podbay.airlock.pod :as pod]
             [reagent.core :as r]
-            [solid-shared.auth :as auth]))
+            [podbay.shared.auth :as auth]))
 
 (defonce db
   (r/atom {:checking-session? true

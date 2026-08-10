@@ -1,11 +1,11 @@
-(ns solid-social.state
+(ns podbay.comms.state
   "A single Reagent atom holds all app state; the functions below are
    the only things that change it. No re-frame — for an app this size a
    plain atom keeps the moving parts visible."
   (:require [promesa.core :as p]
             [reagent.core :as r]
-            [solid-shared.auth :as auth]
-            [solid-social.pod :as pod]))
+            [podbay.shared.auth :as auth]
+            [podbay.comms.pod :as pod]))
 
 (defonce db
   (r/atom {:checking-session? true

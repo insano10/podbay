@@ -1,11 +1,11 @@
-(ns solid-social.pod
+(ns podbay.comms.pod
   "All reading and writing of pod data. This is the JS-interop layer:
    it wraps @inrupt/solid-client and returns plain Clojure data, so the
    rest of the app never touches JS objects.
 
    Data layout inside a pod (relative to the storage root):
 
-     solid-social/
+     podbay/comms/
        contacts.ttl      ; WebIDs this user follows (as:following)
        posts/            ; one .ttl resource per post (an as:Note)
        media/            ; uploaded photos/videos, referenced by posts
@@ -14,11 +14,16 @@
   (:require ["@inrupt/solid-client" :as sc]
             [clojure.string :as str]
             [promesa.core :as p]
-            [solid-shared.auth :as auth]
-            [solid-shared.vocab :as sv]
-            [solid-social.vocab :as v]))
+            [podbay.shared.auth :as auth]
+            [podbay.shared.vocab :as sv]
+            [podbay.comms.vocab :as v]))
 
-(def ^:private app-path "solid-social/")
+(def ^:private app-path
+  "Where this app keeps its data in a pod when nothing else says
+   otherwise. Namespaced under the suite so a later Podbay app can claim
+   its own folder without collisions. Only a fallback: a pod that
+   publishes a type index decides for itself where posts live."
+  "podbay/comms/")
 
 (defn- opts [] #js {:fetch auth/auth-fetch})
 
@@ -103,7 +108,7 @@
 ;; coincidence, not interoperability. What a pod publishes instead is a
 ;; *type index*: a document mapping an RDF class to the container holding
 ;; instances of it. So posts are found by asking "where do this person's
-;; as:Note resources live?" rather than by knowing about solid-social/.
+;; as:Note resources live?" rather than by knowing about podbay/comms/.
 ;;
 ;; Cached like the profile, since a refresh looks it up for every author.
 (defonce ^:private type-index-cache (atom {}))
@@ -317,7 +322,7 @@
   (-> (p/let [ds (type-index+ webid)
               existing (registered-container+ webid v/as-Note)]
         (when (and ds (nil? existing))
-          (p/let [reg (-> (sc/createThing #js {:name "solid-social-posts"})
+          (p/let [reg (-> (sc/createThing #js {:name "podbay-comms-posts"})
                           (sc/addUrl sv/rdf-type v/solid-TypeRegistration)
                           (sc/addUrl v/solid-forClass v/as-Note)
                           (sc/addUrl v/solid-instanceContainer container))

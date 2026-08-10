@@ -1,0 +1,11 @@
+- make sure deployed apps work ok and all features are good
+- finish renaming exercise
+- make adding connection work in feed
+ - ensure it is obvious for a first time user what steps to follow
+ - also remove connection
+
+- add better styling
+- make 502 handling better (spinners and more retries)
+- pod hygiene app
+ - checks for what data is where, type declarations and ACLs
+ - extended profile shenanigans

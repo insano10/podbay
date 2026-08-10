@@ -1,4 +1,4 @@
-(ns solid-social.vocab
+(ns podbay.comms.vocab
   "RDF vocabulary constants. Posts use ActivityStreams 2.0 so the data
    stays interoperable with other Solid social apps.")
 

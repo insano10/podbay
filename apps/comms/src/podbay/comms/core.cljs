@@ -1,7 +1,7 @@
-(ns pod-browser.core
-  (:require [pod-browser.state :as state]
-            [pod-browser.views :as views]
-            [reagent.dom.client :as rdc]))
+(ns podbay.comms.core
+  (:require [reagent.dom.client :as rdc]
+            [podbay.comms.state :as state]
+            [podbay.comms.views :as views]))
 
 (defonce root
   (rdc/create-root (js/document.getElementById "app")))

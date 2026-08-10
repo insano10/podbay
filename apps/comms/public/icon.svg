@@ -1,0 +1,13 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64" role="img" aria-label="Comms">
+  <!-- Broadcast: a source, and signal arcs leaving it. Fixed colours
+       rather than currentColor, since a favicon inherits nothing and has
+       to sit legibly on both light and dark browser chrome. -->
+  <rect width="64" height="64" rx="14" fill="#1f2a44"/>
+  <g fill="none" stroke="#7cc6ff" stroke-width="4.5" stroke-linecap="round">
+    <path d="M24 40a12 12 0 0 1 0-16"/>
+    <path d="M16 47a22 22 0 0 1 0-30"/>
+    <path d="M40 24a12 12 0 0 1 0 16"/>
+    <path d="M48 17a22 22 0 0 1 0 30"/>
+  </g>
+  <circle cx="32" cy="32" r="6" fill="#7cc6ff"/>
+</svg>

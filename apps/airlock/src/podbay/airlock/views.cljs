@@ -1,8 +1,8 @@
-(ns pod-browser.views
+(ns podbay.airlock.views
   "Reagent components. Everything renders from state/db; user actions
-   call functions in pod-browser.state."
+   call functions in podbay.airlock.state."
   (:require [clojure.string :as str]
-            [pod-browser.state :as state]
+            [podbay.airlock.state :as state]
             [reagent.core :as r]))
 
 ;; ---------------------------------------------------------------------------
@@ -52,7 +52,7 @@
   (r/with-let [issuer (r/atom "https://solidcommunity.net")]
     [:div.login
      [:div.login-box
-      [:h1 "Pod Browser"]
+      [:h1 "Airlock"]
       [:p.tagline
        "Browse the files in your Solid pod. Nothing is sent anywhere — "
        "this page talks directly to your pod from your browser."]
@@ -375,7 +375,7 @@
 (defn- header []
   (let [{:keys [webid loading?]} @state/db]
     [:header.app-header
-     [:div.brand "Pod Browser"]
+     [:div.brand "Airlock"]
      [breadcrumbs]
      [address-bar]
      [:div.session

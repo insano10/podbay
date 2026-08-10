@@ -5,8 +5,8 @@ data, in storage you control, read and written straight from the browser.
 
 | App | | |
 |---|---|---|
-| **Solid Social** | `/feed/` | A social feed assembled from the pods of the people you follow |
-| **Pod Browser** | `/browser/` | A file browser for any Solid pod |
+| **Comms** | `/comms/` | A social feed assembled from the pods of the people you follow |
+| **Airlock** | `/airlock/` | A file browser for any Solid pod — the way in and out |
 
 There is deliberately no backend: these are static sites. Authentication
 (Solid-OIDC) and all data access happen in the browser, directly against
@@ -17,34 +17,34 @@ Built with [ClojureScript](https://clojurescript.org/),
 [shadow-cljs](https://shadow-cljs.github.io/docs/UsersGuide.html) and
 [Reagent](https://reagent-project.github.io/).
 
-## Solid Social
+## Comms
 
 Write posts (text plus photos and videos) into **your own pod**, follow
 friends by their WebIDs, and see everyone's posts merged into one
 chronological feed. How it finds and stores that data is described under
-[How data is stored](#how-data-is-stored) below; the pod browser has its
-own section further down.
+[How data is stored](#how-data-is-stored) below; Airlock has its own
+section further down.
 
 ## Repository layout
 
 Two independent single-page apps and the code they share. Neither app
-imports the other; the only common ground is `solid-shared.*`.
+imports the other; the only common ground is `podbay.shared.*`.
 
 ```
 apps/
-  feed/        Solid Social — the feed        (solid-social.*)
+  comms/       Comms — the feed              (podbay.comms.*)
     src/  public/
-  browser/     Pod Browser — files in a pod   (pod-browser.*)
+  airlock/     Airlock — files in a pod      (podbay.airlock.*)
     src/  public/
 shared/
-  src/         auth + generic RDF vocabulary  (solid-shared.*)
+  src/         auth + generic RDF vocabulary (podbay.shared.*)
 site/
   index.html   landing page linking the two
 ```
 
-Each app's `public/` holds its own `index.html`, `css/` and client
-identifier documents; its `js/` is build output and gitignored. All
-three source roots sit on one classpath (`deps.edn`), and shadow-cljs
+Each app's `public/` holds its own `index.html`, `css/`, `icon.svg` and
+client identifier documents; its `js/` is build output and gitignored.
+All three source roots sit on one classpath (`deps.edn`), and shadow-cljs
 compiles only what each build's `:init-fn` reaches — so neither bundle
 contains the other app's code.
 
@@ -67,8 +67,8 @@ This watches **both** apps in this repo:
 
 | URL | App |
 |---|---|
-| <http://localhost:8080> | Solid Social — the feed |
-| <http://localhost:8081> | [Pod Browser](#pod-browser) — a file browser for your pod |
+| <http://localhost:8080> | Comms — the feed |
+| <http://localhost:8081> | [Airlock](#airlock) — a file browser for your pod |
 
 They're on **separate ports deliberately**, and it matters: see
 [Two apps, one session](#two-apps-one-session).
@@ -130,9 +130,9 @@ it to GitHub Pages. `apps/*/public/js/` is gitignored — the site is
 compiled in CI, never committed.
 
 ```
-https://insano10.github.io/podbay/          landing page
-                                       /feed/     Solid Social
-                                       /browser/   Pod Browser
+https://insano10.github.io/podbay/           landing page
+                                  /comms/    Comms
+                                  /airlock/  Airlock
 ```
 
 One-time setup, in the repo's **Settings → Pages**, set *Source* to
@@ -146,12 +146,12 @@ identity at login. Worth re-checking if the hosting ever changes, since
 a document served as `text/plain` may be rejected:
 
 ```sh
-curl -sI https://insano10.github.io/podbay/feed/clientid.jsonld | grep -i content-type
+curl -sI https://insano10.github.io/podbay/comms/clientid.jsonld | grep -i content-type
 ```
 
-## Pod Browser
+## Airlock
 
-A second, separate app in this repo, served at `/browser/`: a plain
+A second, separate app in this repo, served at `/airlock/`: a plain
 file browser for any Solid pod — pick your identity provider, sign in,
 and walk the containers like folders. It exists because the alternatives
 are thin on the ground. Inrupt sunset PodBrowser, Penny is explicitly a
@@ -162,16 +162,16 @@ which is why an ESS pod, serving no HTML at all, simply won't open in
 any of them.
 
 ```
-apps/browser/
-├── src/pod_browser/
+apps/airlock/
+├── src/podbay/airlock/
 │   ├── core.cljs     # entry point
 │   ├── state.cljs    # one atom, plus the actions that change it
 │   ├── views.cljs    # Reagent components
 │   └── pod.cljs      # the only JS-interop namespace here
-└── public/           # index.html, css/, client identifier documents
+└── public/           # index.html, css/, icon.svg, client documents
 ```
 
-It shares only the `solid-shared.*` namespaces with the feed app —
+It shares only the `podbay.shared.*` namespaces with Comms —
 authentication and the generic RDF vocabulary — rather than
 reimplementing the OIDC dance. Everything else is its own.
 
@@ -228,7 +228,7 @@ Separate dev ports (`8080`, `8081`) side-step it locally, but the
 deployed site can't: both apps live under `insano10.github.io`, and
 origin is the host, not the path.
 
-So neither app uses the library's default session. `solid-shared.auth`
+So neither app uses the library's default session. `podbay.shared.auth`
 builds its **own** `Session` over storage that prefixes every key:
 
 ```clojure
@@ -256,19 +256,19 @@ past this point logs everyone out once.
 ### Its own identity
 
 The browser has separate client identifier documents
-(`apps/browser/public/clientid*.jsonld`) from the feed app's, so the consent screen names what is actually asking for access —
-"Pod Browser", not "Solid Social". Same split between published and
+(`apps/airlock/public/clientid*.jsonld`) from the feed app's, so the consent screen names what is actually asking for access —
+"Airlock", not "Comms". Same split between published and
 localhost redirect URIs, for the same reason. See
 [Client identity](#client-identity).
 
 ## How data is stored
 
-By default everything lives in the pod under `solid-social/` at the
+By default everything lives in the pod under `podbay/comms/` at the
 storage root — though the posts container is discovered rather than
 assumed, so it and its media can be anywhere (see below):
 
 ```
-solid-social/
+podbay/comms/
 ├── contacts.ttl        # WebIDs you follow
 └── posts/              # one Turtle resource per post
     ├── 2026-08-01T12-00-00-000Z.ttl
@@ -301,7 +301,7 @@ everything sorted by `as:published`.
 
 ### Finding where posts live
 
-Solid mandates no folder layout, so `solid-social/` is an
+Solid mandates no folder layout, so `podbay/comms/` is an
 implementation detail and not something another app could ever guess.
 Portability comes from the vocabulary (ActivityStreams, above) plus
 *discovery*: a pod advertises where each kind of data lives in its
@@ -309,17 +309,17 @@ Portability comes from the vocabulary (ActivityStreams, above) plus
 WebID profile as `solid:publicTypeIndex`.
 
 So the question the app asks is "where do this person's `as:Note`
-resources live?", never "what's in their `solid-social/` folder":
+resources live?", never "what's in their `podbay/comms/` folder":
 
 ```turtle
-<#solid-social-posts>
+<#podbay-comms-posts>
     a solid:TypeRegistration ;
     solid:forClass as:Note ;
-    solid:instanceContainer </solid-social/posts/> .
+    solid:instanceContainer </podbay/comms/posts/> .
 ```
 
 `pod/posts-container+` resolves that registration and falls back to
-`solid-social/posts/` under the storage root when a pod publishes no
+`podbay/comms/posts/` under the storage root when a pod publishes no
 index or no registration for the class. **Reads and writes both go
 through it**, so the app never holds two different ideas of where
 someone's posts are.
@@ -504,13 +504,13 @@ There are two documents, deliberately:
 
 | File | Identity | Redirect URIs |
 |---|---|---|
-| `public/clientid.jsonld` | `Solid Social` — the published app | the GitHub Pages URL |
-| `public/clientid-dev.jsonld` | `Solid Social (local development)` | `http://localhost:8080/` |
+| `public/clientid.jsonld` | `Comms` — the published app | the GitHub Pages URL |
+| `public/clientid-dev.jsonld` | `Comms (local development)` | `http://localhost:8080/` |
 
 They're split because anyone may use a published client ID in their own
 authorization request. If the real app's document permitted localhost
 redirects, someone could compose a request that shows the victim a
-consent screen reading "Solid Social" and have the code delivered to
+consent screen reading "Comms" and have the code delivered to
 `localhost` on the victim's own machine — harmless unless something
 hostile is listening on that port, but developers do run things on 8080,
 and on node-solid-server trust is granted per *origin*, so a single
@@ -524,7 +524,7 @@ per build in `shadow-cljs.edn`:
 - `npm run release` → the published identity.
 - `npm run dev` → **currently dynamic registration.** Both `:dev` blocks
   in `shadow-cljs.edn` are `#_`-disabled because the documents they name
-  live at the restructured `/feed/` and `/browser/` URLs, which don't
+  live at the restructured `/comms/` and `/airlock/` URLs, which don't
   exist until a Pages deploy publishes them. Re-enable both after the
   first successful deploy of that layout.
 
@@ -556,7 +556,7 @@ trusting any of this:
 1. That the document is served as `application/ld+json`. GitHub Pages
    may not map the `.jsonld` extension and could serve it as plain
    text, which some providers reject:
-   `curl -sI https://insano10.github.io/podbay/feed/clientid.jsonld | grep -i content-type`
+   `curl -sI https://insano10.github.io/podbay/comms/clientid.jsonld | grep -i content-type`
 2. That `redirect_uris` matches the deployed URL **exactly** — the
    provider does a literal string comparison. `login!` builds its
    redirect from `origin + pathname` for this reason, so a stray query
@@ -610,13 +610,13 @@ or ignore it.
 
 | Namespace             | Role                                                       |
 |-----------------------|------------------------------------------------------------|
-| `solid-social.core`   | Entry point: mounts the UI, restores the session           |
-| `solid-social.views`  | Reagent components (login, composer, contacts, feed)       |
-| `solid-social.state`  | Single app-state atom and the actions that mutate it       |
-| `solid-social.pod`    | All pod I/O — wraps `@inrupt/solid-client`, returns cljs data |
-| `solid-social.vocab`  | ActivityStreams, FOAF, vCard and type-index terms          |
-| `solid-shared.auth`   | Solid-OIDC login/logout/session, and the retrying pod `fetch` |
-| `solid-shared.vocab`  | Generic RDF/LDP terms both apps need                       |
+| `podbay.comms.core`   | Entry point: mounts the UI, restores the session           |
+| `podbay.comms.views`  | Reagent components (login, composer, contacts, feed)       |
+| `podbay.comms.state`  | Single app-state atom and the actions that mutate it       |
+| `podbay.comms.pod`    | All pod I/O — wraps `@inrupt/solid-client`, returns cljs data |
+| `podbay.comms.vocab`  | ActivityStreams, FOAF, vCard and type-index terms          |
+| `podbay.shared.auth`   | Solid-OIDC login/logout/session, and the retrying pod `fetch` |
+| `podbay.shared.vocab`  | Generic RDF/LDP terms both apps need                       |
 
 `pod.cljs` is the only namespace that touches JS objects; everything
 above it works with plain Clojure maps.
@@ -631,7 +631,7 @@ keeping applied consistently.
 
 - **Access control is manual.** New resources inherit your pod's default
   permissions, which usually means private. For friends to see your
-  posts you currently need to make `solid-social/` readable (by them, or
+  posts you currently need to make `podbay/comms/` readable (by them, or
   publicly) via your pod provider's UI. Managing ACLs from the app is
   the natural next feature.
 - **No pagination.** Every post from every contact is loaded on refresh,
@@ -640,7 +640,7 @@ keeping applied consistently.
   personal-network scale; beyond that you'd want container-level date
   filtering or a summary index resource.
 - **The contacts list is still found by convention**
-  (`solid-social/contacts.ttl`), unlike posts. Registering it would mean
+  (`podbay/comms/contacts.ttl`), unlike posts. Registering it would mean
   choosing an RDF class for "a list of people I follow", and there isn't
   an established one — ActivityStreams models `as:following` as a
   property of an actor pointing at a collection, not as a class you can

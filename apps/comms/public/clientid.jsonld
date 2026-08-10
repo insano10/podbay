@@ -2,15 +2,15 @@
   "@context": [
     "https://www.w3.org/ns/solid/oidc-context.jsonld"
   ],
-  "client_id": "https://insano10.github.io/podbay/browser/clientid-dev.jsonld",
-  "client_name": "Pod Browser (local development)",
-  "client_uri": "https://github.com/insano10/podbay",
+  "client_id": "https://insano10.github.io/podbay/comms/clientid.jsonld",
+  "client_name": "Podbay Comms",
+  "client_uri": "https://insano10.github.io/podbay/comms/",
   "redirect_uris": [
-    "http://localhost:8081/",
-    "http://localhost:8081/index.html"
+    "https://insano10.github.io/podbay/comms/",
+    "https://insano10.github.io/podbay/comms/index.html"
   ],
   "post_logout_redirect_uris": [
-    "http://localhost:8081/"
+    "https://insano10.github.io/podbay/comms/"
   ],
   "scope": "openid profile offline_access webid",
   "grant_types": [

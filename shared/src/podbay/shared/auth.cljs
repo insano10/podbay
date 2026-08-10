@@ -1,4 +1,4 @@
-(ns solid-shared.auth
+(ns podbay.shared.auth
   "Solid-OIDC authentication. All of this runs in the browser — the app
    never sees credentials, it just gets a session whose `fetch` attaches
    the right tokens to requests against pods.
@@ -13,7 +13,7 @@
             [clojure.string :as str]
             [promesa.core :as p]))
 
-(goog-define storage-prefix "solidApp:")
+(goog-define storage-prefix "podbay:")
 
 (defn- prefixed-storage
   "The tiny storage interface the library asks for — get/set/delete,
@@ -116,6 +116,11 @@
 
 (goog-define client-id "")
 
+;; Only used when registering dynamically — with a client identifier
+;; document the provider takes the name from there instead. Shared code
+;; can't know which app it is, so each build says.
+(goog-define client-name "Podbay")
+
 (defn- redirect-url
   "Where the identity provider sends the browser back to. Deliberately
    built from origin + path rather than the current href: with a client
@@ -137,7 +142,7 @@
   (.login ^js session
    (clj->js (cond-> {:oidcIssuer oidc-issuer
                      :redirectUrl (redirect-url)
-                     :clientName "Solid Social"}
+                     :clientName client-name}
               (seq client-id) (assoc :clientId client-id)))))
 
 (defn logout! []
