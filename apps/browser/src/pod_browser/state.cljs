@@ -15,6 +15,10 @@
            :entries []
            :loading? false
            :open nil            ; the resource being viewed, if any
+           :access nil          ; who that resource is shared with
+           :access-busy? false
+           :propagation nil     ; did a container grant reach its contents?
+           :confirm-public nil  ; a public grant awaiting confirmation
            :opening nil         ; its url while the fetch is in flight
            :menu nil            ; {:x :y :entry} for the context menu
            :confirm nil         ; entry awaiting delete confirmation
@@ -43,11 +47,33 @@
 (defn close-file! []
   (when-let [object-url (:object-url (:open @db))]
     (pod/release-object-url! object-url))
-  (swap! db assoc :open nil :opening nil))
+  (swap! db assoc :open nil :opening nil :access nil :propagation nil))
+
+(defn- load-access!
+  "Fetch who a resource is shared with, alongside its contents. Kept in
+   its own key rather than merged into :open because it resolves
+   separately, and because being refused is a normal outcome worth
+   showing as such."
+  [url]
+  (swap! db assoc :access {:url url :status :loading})
+  (let [current? #(= url (:url (:access @db)))]
+    (-> (pod/access+ url)
+        (p/then (fn [access]
+                  (when (current?)
+                    (swap! db assoc :access
+                           (merge {:url url :status :ready} access)))))
+        (p/catch (fn [e]
+                   (js/console.warn "Couldn't read access for" url e)
+                   (when (current?)
+                     (swap! db assoc :access
+                            {:url url
+                             :status :denied
+                             :message (or (some-> ^js e .-message) (str e))})))))))
 
 (defn open-file! [{:keys [url] :as entry}]
   (close-file!)
   (swap! db assoc :opening url :menu nil)
+  (load-access! url)
   (-> (pod/read-resource+ url)
       (p/then (fn [resource]
                 ;; ignore a read the user has already navigated away from
@@ -72,7 +98,15 @@
                   (swap! db assoc :entries entries :loading? false))))
       (p/catch (fn [e]
                  (when (= url (:path @db))
-                   (set-error! (describe (str "Couldn't list " url) e)))))))
+                   (set-error!
+                    (str (describe (str "Couldn't list " url) e)
+                         ;; access is per resource, not a path you walk
+                         ;; down, so being refused a container says
+                         ;; nothing about what's inside it
+                         (when (#{401 403} (some-> ^js e .-statusCode))
+                           " — access is granted per resource, so a folder
+                             shared with you opens directly by its URL even
+                             when the folder above it doesn't."))))))))
 
 (defn refresh! []
   (when-let [path (:path @db)]
@@ -82,6 +116,30 @@
   (if container?
     (open-container! (:url entry))
     (open-file! entry)))
+
+(defn show-details!
+  "Open a resource in the viewer *without* navigating into it. The only
+   way to see a container's own metadata and sharing, since clicking a
+   folder means 'go inside' — and a container's representation is its
+   listing, which reads perfectly well as Turtle."
+  [entry]
+  (open-file! entry))
+
+(defn show-current-details! []
+  (when-let [path (:path @db)]
+    (show-details! {:url path :name (pod/entry-name path) :container? true})))
+
+(defn open-url!
+  "Jump to any pod URL. A trailing slash means a container, so browse
+   it; anything else is a resource, so open it. This is how you reach a
+   pod that isn't the one you signed in with — access is still decided
+   by the server, but the app shouldn't be the thing stopping you."
+  [url]
+  (let [url (str/trim url)]
+    (when (seq url)
+      (if (str/ends-with? url "/")
+        (open-container! url)
+        (open-file! {:url url :name (pod/entry-name url) :container? false})))))
 
 (defn crumbs
   "Breadcrumbs from the storage root down to the current container, as
@@ -100,6 +158,64 @@
                  {:label (js/decodeURIComponent segment)
                   :url (str root (str/join "/" (take (inc i) segments)) "/")})
                segments))))))
+
+;; ---------------------------------------------------------------------------
+;; Changing who can see things
+;;
+;; WAC (Community Solid Server) inherits: a grant on a container covers
+;; what's inside it unless a child overrides. ACP (Inrupt ESS) composes
+;; policies instead, and a container's own access is not necessarily its
+;; members'. universalAccess unifies the API, not the semantics — so
+;; after every change to a container we check a resource inside it and
+;; report what actually happened rather than assuming it worked.
+
+(defn- check-propagation!
+  "Did a grant on this container reach the things inside it?"
+  [container-url webid]
+  (let [child (->> (:entries @db)
+                   (remove :container?)
+                   first)]
+    (when (and child (= container-url (:path @db)))
+      (-> (pod/agent-access+ (:url child) webid)
+          (p/then (fn [child-access]
+                    (swap! db assoc :propagation
+                           {:child (:name child)
+                            :reached? (boolean (:read child-access))})))
+          (p/catch (fn [_] (swap! db assoc :propagation nil)))))))
+
+(defn- after-access-change! [url webid]
+  (swap! db assoc :access-busy? false)
+  (load-access! url)
+  (when (and webid (str/ends-with? url "/"))
+    (check-propagation! url webid)))
+
+(defn grant-agent! [webid access]
+  (when-let [url (:url (:access @db))]
+    (swap! db assoc :access-busy? true :propagation nil)
+    (-> (pod/set-agent-access+ url webid access)
+        (p/then (fn [_] (after-access-change! url webid)))
+        (p/catch (fn [e]
+                   (swap! db assoc :access-busy? false)
+                   (set-error! (describe (str "Couldn't change access for " webid) e)))))))
+
+(defn revoke-agent! [webid]
+  (grant-agent! webid {:read false :append false :write false
+                       :control-read false :control-write false}))
+
+(defn set-public! [access]
+  (when-let [url (:url (:access @db))]
+    (swap! db assoc :access-busy? true :propagation nil :confirm-public nil)
+    (-> (pod/set-public-access+ url access)
+        (p/then (fn [_] (after-access-change! url nil)))
+        (p/catch (fn [e]
+                   (swap! db assoc :access-busy? false)
+                   (set-error! (describe "Couldn't change public access" e)))))))
+
+(defn ask-public! [access]
+  (swap! db assoc :confirm-public access))
+
+(defn cancel-public! []
+  (swap! db assoc :confirm-public nil))
 
 ;; ---------------------------------------------------------------------------
 ;; Context menu and deletion

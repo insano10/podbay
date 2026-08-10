@@ -357,3 +357,63 @@ img.preview { max-width: 100%; border-radius: 0.5rem; }
   padding: 0.4rem 0.875rem;
 }
 .modal-actions button.danger { border-color: var(--danger); color: var(--danger); }
+
+/* --- sharing ----------------------------------------------------------- */
+
+.sharing { margin-top: 1.5rem; border-top: 1px solid var(--border); padding-top: 1rem; }
+.sharing h2 {
+  font-size: 0.8rem; text-transform: uppercase; letter-spacing: 0.04em;
+  color: var(--text-muted); margin: 0 0 0.5rem;
+}
+.sharing .hint { padding: 0; font-size: 0.8rem; }
+.sharing dt.agent { text-transform: none; letter-spacing: 0; font-size: 0.75rem; }
+
+.modes { display: flex; flex-wrap: wrap; gap: 0.25rem; }
+.mode {
+  font-size: 0.7rem;
+  padding: 0.05rem 0.4rem;
+  border-radius: 999px;
+  background: var(--accent-soft);
+  border: 1px solid var(--border);
+}
+.mode.none { background: none; color: var(--text-muted); }
+.unreported { color: var(--text-muted); font-size: 0.8rem; font-style: italic; }
+
+/* --- address bar ------------------------------------------------------- */
+
+.address { display: flex; gap: 0.25rem; align-items: center; flex: 1 1 18rem; min-width: 10rem; }
+.address input {
+  flex: 1; min-width: 0;
+  padding: 0.3rem 0.5rem;
+  border: 1px solid var(--border);
+  border-radius: 0.375rem;
+  background: var(--bg);
+  color: var(--text);
+  font: inherit;
+  font-size: 0.85rem;
+}
+.app-header .crumbs { flex: 1 1 12rem; }
+
+@media (max-width: 55rem) {
+  .app-header { flex-wrap: wrap; }
+  .address { order: 3; flex-basis: 100%; }
+}
+
+/* --- sharing controls -------------------------------------------------- */
+
+.public-toggle { display: flex; gap: 0.4rem; align-items: center;
+                 margin: 0.5rem 0 0.75rem; font-size: 0.8rem; }
+.grant { margin-top: 0.75rem; display: flex; flex-direction: column; gap: 0.4rem; }
+.grant input[type="url"] {
+  width: 100%; padding: 0.3rem 0.5rem; font: inherit; font-size: 0.8rem;
+  border: 1px solid var(--border); border-radius: 0.375rem;
+  background: var(--bg); color: var(--text);
+}
+.grant-modes { display: flex; gap: 0.6rem; flex-wrap: wrap; font-size: 0.75rem; }
+.grant-modes label { display: flex; gap: 0.2rem; align-items: center; }
+.grant button.primary { padding: 0.3rem 0.75rem; font-size: 0.8rem; }
+button.revoke { font-size: 0.7rem; margin-left: 0.4rem; }
+.sharing .warn {
+  font-size: 0.8rem; color: var(--danger);
+  background: var(--danger-soft); padding: 0.5rem; border-radius: 0.375rem;
+}

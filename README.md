@@ -178,6 +178,26 @@ What it does today:
   `WAC-Allow`, which is your actual access to that resource.
 - **A failed read is shown, not swallowed.** A 403 renders as a 403 with
   the server's message, because "you may not read this" is information.
+- **Sharing** is shown for the open resource: who has read, append,
+  write and control, both publicly and per agent. The two servers this
+  is used against don't share an access-control system — Community Solid
+  Server implements WAC (an `.acl` beside each resource), Inrupt ESS
+  implements ACP (composed policies) — so it goes through
+  solid-client's `universalAccess`, which speaks both. Reading an access
+  control resource itself needs *control* access, so being refused on
+  someone else's data is the normal answer, and is shown as such rather
+  than as an error — which also means sharing can only be *changed*
+  while signed in as that pod's owner.
+- **Changing sharing**: grant a WebID read/append/write, revoke, or make
+  something readable by anyone. Widening access to everyone asks for
+  confirmation, because it can't be undone — revoking later doesn't
+  retrieve a copy someone already took.
+- **A grant on a folder is verified, not assumed.** WAC inherits: a
+  container's access covers what's inside unless a child overrides. ACP
+  composes policies, and a container's own access need not be its
+  members'. `universalAccess` unifies the API, not the semantics — so
+  after granting on a container the app reads back a resource *inside*
+  it and says whether the grant actually reached it.
 - **Right-click** any row for open, copy URL, open raw, and delete.
   Delete asks for confirmation naming the resource, and containers use a
   different call from files — most servers refuse to delete a container
@@ -193,16 +213,34 @@ silently re-authenticates with `restorePreviousSession`, and — because
 `silentlyAuthenticate` reuses the *stored* session's redirect URL — the
 identity provider sends the user back to the **other app**.
 
-Hence two dev ports: `8080` for the feed, `8081` for the browser. Two
-origins, two `localStorage` scopes, no interference.
+Separate dev ports (`8080`, `8081`) side-step it locally, but the
+deployed site can't: both apps live under `insano10.github.io`, and
+origin is the host, not the path.
 
-This is unresolved for the **deployed** site, where both live under
-`insano10.github.io/solid-social/` and so share an origin. The fix is
-either a separate host for the browser, or constructing an explicit
-`Session` with namespaced storage instead of the default one — the
-library supports it (`new Session({secureStorage, insecureStorage})`),
-though the keys tracking *which* session to restore are still written
-to raw `localStorage` and would stay shared.
+So neither app uses the library's default session. `solid-shared.auth`
+builds its **own** `Session` over storage that prefixes every key:
+
+```clojure
+(goog-define storage-prefix "solidApp:")     ; set per build
+(authn/Session. #js {:secureStorage (prefixed-storage)
+                     :insecureStorage (prefixed-storage)})
+```
+
+`shadow-cljs.edn` sets it to `solidSocialFeed:` and `podBrowser:`, so
+tokens, issuer, client registration and redirect URL are per app.
+
+One wrinkle the library forces: it decides *which* session to restore
+from a single key it reads with raw `localStorage`
+(`solidClientAuthn:currentSession`), bypassing whatever storage you give
+it. Left alone, both apps would fight over that one key and whichever
+logged in last would be the only one still able to restore. So
+`handle-redirect!` points it at our own copy before the library looks,
+and writes ours back afterwards. That depends on an internal key name —
+as `?reset` already does — and would need revisiting on a major library
+upgrade.
+
+Note that changing the prefix moves where sessions live, so an upgrade
+past this point logs everyone out once.
 
 ### Its own identity
 
@@ -292,6 +330,42 @@ feed as they arrive rather than waiting for the slowest contact —
 of it. A contact whose pod is unreachable contributes `[]` instead of
 breaking the feed.
 
+### Absent vs unreadable
+
+Every read distinguishes two things that are easy to conflate: **"the
+server told us there is nothing"** and **"we couldn't ask"**. A 404 is
+an answer worth acting on — a pod that publishes no type index really
+has none, so fall back to the convention. Anything else (401, 403, 502,
+a dropped connection) is ignorance, and guessing past it is how a
+transient blip becomes a feed that silently shows nothing, or reads the
+wrong container.
+
+Concretely, a failure now propagates rather than becoming a plausible
+empty value:
+
+| Read | 404 means | other failures |
+|---|---|---|
+| WebID profile | no profile document | rejects (not cached) |
+| storage root | fall back to WebID origin | rejects |
+| type index | no index published | rejects |
+| `contacts.ttl` | you follow nobody yet | rejects |
+| someone's posts | — | rejects, recorded per author |
+
+`state/fetch-authors!` catches per author, so one unreachable contact
+still can't break the whole feed — but it records *why* in `:unreadable`
+and the feed shows it, rather than rendering as though that person had
+posted nothing. The "No posts yet" message only appears when nothing
+failed; otherwise it would be a guess presented as a fact.
+
+Deliberately still forgiving, because the fallback is genuinely
+harmless: display names and avatars (you get the WebID host instead),
+registering the posts container (a courtesy to other apps, and must
+never fail the post), and individual unreadable post resources — though
+all three now log to the console rather than vanishing.
+
+Failure caches are evicted rather than kept, so one bad moment can't
+poison a whole session.
+
 ### Flaky servers
 
 Pod servers are not always reliable. solidcommunity.net intermittently
@@ -337,6 +411,25 @@ The right-hand column is either immutable once written or already
 memoised in-process for the session (`pod/profile+`, `pod/type-index+`),
 with those in-memory caches dropped explicitly — on logout, and after
 registering a type so the next read sees the registration.
+
+### Names and avatars
+
+A WebID document has to be publicly readable: an app must fetch it to
+discover your `solid:oidcIssuer` *before* you've authenticated to that
+app, so it can't be access-controlled without a chicken-and-egg problem.
+Anything in it is therefore permanently public.
+
+Providers respond to that differently. solidcommunity.net puts your
+name, photo and contact details straight in the card. Inrupt's pods keep
+the WebID document to the plumbing — `oidcIssuer`, `pim:storage` — and
+link the personal details with `rdfs:seeAlso`, in a document whose
+access you control.
+
+`load-profile+` handles both: it reads the WebID document first, and
+only follows the linked profiles (via solid-client's `getProfileAll`)
+when that document carries no name. Those documents are often *not*
+readable by you, which is the intended design rather than a failure —
+so it falls back quietly to the WebID's host as a display name.
 
 ### Round trips
 

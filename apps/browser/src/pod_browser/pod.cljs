@@ -42,13 +42,20 @@
 (defn storage-roots+
   "The storage roots advertised by a WebID profile. Falls back to the
    WebID's own origin, which is right for most providers, so a profile
-   that says nothing still gives us somewhere to start."
+   that says nothing still gives us somewhere to start.
+
+   That fallback is for a profile we *read* which doesn't say — not for
+   one we couldn't read. Rooting the browser at a guessed origin after a
+   failed fetch would silently show you the wrong pod."
   [webid]
   (-> (p/let [ds (sc/getSolidDataset webid (opts))
               thing (sc/getThing ds webid)
               urls (when thing (vec (array-seq (sc/getUrlAll thing v/pim-storage))))]
         (seq urls))
-      (p/catch (fn [_] nil))
+      (p/catch (fn [e]
+                 (if (= 404 (some-> ^js e .-statusCode))
+                   nil
+                   (p/rejected e))))
       (p/then (fn [roots]
                 (vec (or roots [(str (.-origin (js/URL. webid)) "/")]))))))
 
@@ -148,6 +155,82 @@
   "Free an :object-url from read-resource+."
   [object-url]
   (js/URL.revokeObjectURL object-url))
+
+;; ---------------------------------------------------------------------------
+;; Who can see this
+;;
+;; The two servers this app is used against don't share an access-control
+;; system: Community Solid Server implements WAC (an .acl document beside
+;; each resource), Inrupt ESS implements ACP (composed policies). We ask
+;; through solid-client's universal access API, which speaks both.
+;;
+;; Reading an access control resource itself requires *control* access,
+;; so this only succeeds on data you own. Being refused is a normal
+;; answer here, not a malfunction.
+
+(def ^:private universal-access sc/universalAccess)
+
+(defn- access->map [^js a]
+  (when a
+    {:read (.-read a)
+     :append (.-append a)
+     :write (.-write a)
+     :control-read (.-controlRead a)
+     :control-write (.-controlWrite a)}))
+
+(defn- agents->map [^js all]
+  (when all
+    (into {}
+          (for [webid (array-seq (js/Object.keys all))]
+            [webid (access->map (aget all webid))]))))
+
+(defn access+
+  "Who can do what with a resource.
+
+   Resolves to {:public {…} :agents {webid {…}}}. Either half is nil
+   when the server won't say — a server may simply not report public
+   access, which is different from reporting that there is none. Rejects
+   only if the access control resource can't be read at all, which is
+   what happens on resources you don't control."
+  [url]
+  (p/let [public (.getPublicAccess ^js universal-access url (opts))
+          agents (.getAgentAccessAll ^js universal-access url (opts))]
+    {:public (access->map public)
+     :agents (agents->map agents)}))
+
+(defn- ->js-access
+  "Only the modes actually named are sent, so a change can adjust one
+   permission without restating the others."
+  [m]
+  (let [o #js {}]
+    (when (contains? m :read) (aset o "read" (boolean (:read m))))
+    (when (contains? m :append) (aset o "append" (boolean (:append m))))
+    (when (contains? m :write) (aset o "write" (boolean (:write m))))
+    (when (contains? m :control-read) (aset o "controlRead" (boolean (:control-read m))))
+    (when (contains? m :control-write) (aset o "controlWrite" (boolean (:control-write m))))
+    o))
+
+(defn set-agent-access+
+  "Grant or revoke one person's access. Needs control access, so it only
+   works on a pod you own."
+  [url webid access]
+  (p/let [result (.setAgentAccess ^js universal-access url webid
+                                  (->js-access access) (opts))]
+    (access->map result)))
+
+(defn set-public-access+
+  "Change what everyone — including people who aren't signed in — can do."
+  [url access]
+  (p/let [result (.setPublicAccess ^js universal-access url
+                                   (->js-access access) (opts))]
+    (access->map result)))
+
+(defn agent-access+
+  "One agent's access to one resource. Used to check whether a grant on
+   a container actually reached the things inside it."
+  [url webid]
+  (p/let [result (.getAgentAccess ^js universal-access url webid (opts))]
+    (access->map result)))
 
 ;; ---------------------------------------------------------------------------
 ;; Writing (deleting, for now)

@@ -1,10 +1,46 @@
 (ns solid-shared.auth
   "Solid-OIDC authentication. All of this runs in the browser — the app
    never sees credentials, it just gets a session whose `fetch` attaches
-   the right tokens to requests against pods."
+   the right tokens to requests against pods.
+
+   Each app gets its **own** session with its own storage, rather than
+   the library's default one. That matters because localStorage is
+   scoped to an origin, not a path: two apps deployed under one origin
+   would otherwise share a single session, and whichever loaded second
+   would silently re-authenticate using the other's redirect URL and
+   land the user in the wrong app. Set storage-prefix per build."
   (:require ["@inrupt/solid-client-authn-browser" :as authn]
             [clojure.string :as str]
             [promesa.core :as p]))
+
+(goog-define storage-prefix "solidApp:")
+
+(defn- prefixed-storage
+  "The tiny storage interface the library asks for — get/set/delete,
+   each returning a promise — backed by localStorage under our prefix."
+  []
+  #js {:get (fn [k] (p/resolved
+                     (or (.getItem js/localStorage (str storage-prefix k))
+                         js/undefined)))
+       :set (fn [k v] (p/resolved (.setItem js/localStorage (str storage-prefix k) v)))
+       :delete (fn [k] (p/resolved (.removeItem js/localStorage (str storage-prefix k))))})
+
+(defonce ^:private session
+  (authn/Session. #js {:secureStorage (prefixed-storage)
+                       :insecureStorage (prefixed-storage)}))
+
+(def ^:private library-prefix
+  "Where solid-client-authn-browser keeps its own session state, outside
+   our namespaced storage."
+  "solidClientAuthn:")
+
+(def ^:private library-pointer
+  "The one key the library reads with raw localStorage to decide which
+   session to restore. It is not routed through the storage we supply,
+   so on a shared origin both apps would otherwise fight over it."
+  (str library-prefix "currentSession"))
+
+(defn- our-pointer [] (str storage-prefix "currentSession"))
 
 ;; ---------------------------------------------------------------------------
 ;; Talking to pods
@@ -57,7 +93,7 @@
                    (attempt (inc n)))
                  (fallback)))
              (attempt [n]
-               (-> (authn/fetch url init)
+               (-> (.fetch ^js session url init)
                    (p/then (fn [^js resp]
                              (if (contains? retry-statuses (.-status resp))
                                (retry-or n (constantly resp))
@@ -70,7 +106,7 @@
        (attempt 1)))))
 
 (defn- session-info []
-  (.-info ^js (authn/getDefaultSession)))
+  (.-info ^js session))
 
 (defn logged-in? []
   (boolean (.-isLoggedIn ^js (session-info))))
@@ -98,14 +134,15 @@
    login instead — fine for local work, but those registrations expire
    and a stale one locks you out (see recover-from-url! below)."
   [oidc-issuer]
-  (authn/login
+  (.login ^js session
    (clj->js (cond-> {:oidcIssuer oidc-issuer
                      :redirectUrl (redirect-url)
                      :clientName "Solid Social"}
               (seq client-id) (assoc :clientId client-id)))))
 
 (defn logout! []
-  (authn/logout))
+  (-> (.logout ^js session)
+      (p/then (fn [r] (.removeItem js/localStorage (str storage-prefix "currentSession")) r))))
 
 (defn handle-redirect!
   "Completes the OIDC flow if we just came back from the identity
@@ -117,7 +154,18 @@
    promise never settles — the library returns one that deliberately
    never resolves, because the page is about to be replaced."
   []
-  (authn/handleIncomingRedirect #js {:restorePreviousSession true}))
+  ;; Point the library at *our* session before it looks, and record ours
+  ;; again afterwards. Without this the two apps overwrite one shared
+  ;; key and the loser silently stops restoring.
+  (if-let [ours (.getItem js/localStorage (our-pointer))]
+    (.setItem js/localStorage library-pointer ours)
+    (.removeItem js/localStorage library-pointer))
+  (-> (.handleIncomingRedirect ^js session #js {:restorePreviousSession true})
+      (p/then (fn [info]
+                (when (logged-in?)
+                  (.setItem js/localStorage (our-pointer)
+                            (.-sessionId ^js (session-info))))
+                info))))
 
 ;; ---------------------------------------------------------------------------
 ;; Recovery
@@ -129,10 +177,6 @@
 ;; and the next load attempts the very same request. The app never renders
 ;; long enough to offer a way out, so the way out has to be in the URL.
 
-(def ^:private storage-prefix
-  "Where solid-client-authn-browser keeps its session state."
-  "solidClientAuthn:")
-
 (defn forget-session!
   "Delete the locally stored Solid session, so the next load starts from
    a clean login instead of retrying a session the provider won't honour."
@@ -141,7 +185,8 @@
     ;; walk backwards: removing a key shifts the ones after it
     (doseq [i (reverse (range (.-length store)))
             :let [k (.key store i)]
-            :when (and k (str/starts-with? k storage-prefix))]
+            :when (and k (or (str/starts-with? k library-prefix)
+                             (str/starts-with? k storage-prefix)))]
       (.removeItem store k))))
 
 (defn recover-from-url!

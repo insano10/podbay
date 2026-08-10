@@ -144,9 +144,20 @@
              ;; at once rather than making the feed wait on the contacts
              ;; fetch before it asks for anything.
              (-> (p/all [(fetch-authors! [webid])
-                         (p/let [contacts (pod/load-contacts+ webid)]
-                           (swap! db assoc :contacts contacts)
-                           (fetch-authors! contacts))])
+                         ;; a contact list we couldn't read is reported,
+                         ;; never treated as "you follow nobody" — that
+                         ;; would quietly reduce the feed to your own
+                         ;; posts and look perfectly normal
+                         (-> (p/let [contacts (pod/load-contacts+ webid)]
+                               (swap! db assoc :contacts contacts)
+                               (fetch-authors! contacts))
+                             (p/catch
+                              (fn [e]
+                                (js/console.error "Couldn't load contacts" e)
+                                (set-error!
+                                 (str "Couldn't load who you follow: "
+                                      (.-message e)
+                                      " — your own posts are still shown.")))))])
                  (p/then (fn [_] (swap! db assoc :loading-feed? false)))
                  (p/catch #(set-error! (str "Couldn't load feed: "
                                             (.-message %)))))))))

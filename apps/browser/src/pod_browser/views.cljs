@@ -122,6 +122,120 @@
 ;; ---------------------------------------------------------------------------
 ;; Viewer: content in one pane, metadata beside it
 
+(def ^:private access-modes
+  [[:read "Read"] [:append "Append"] [:write "Write"]
+   [:control-read "See sharing"] [:control-write "Change sharing"]])
+
+(defn- modes-granted
+  "The permissions actually granted, as chips. An access map with
+   everything false is a real answer — it means no access — so say so
+   rather than rendering nothing."
+  [access]
+  (let [granted (for [[k label] access-modes :when (get access k)] label)]
+    (if (seq granted)
+      (into [:span.modes]
+            (for [label granted] ^{:key label} [:span.mode label]))
+      [:span.modes [:span.mode.none "No access"]])))
+
+(defn- add-person []
+  (r/with-let [webid (r/atom "")
+               modes (r/atom #{:read})
+               toggle! (fn [m] (swap! modes #(if (% m) (disj % m) (conj % m))))]
+    (let [busy? (:access-busy? @state/db)
+          valid? (str/starts-with? (str/trim @webid) "http")]
+      [:div.grant
+       [:input {:type "url"
+                :placeholder "Give access to a WebID"
+                :value @webid
+                :spell-check false
+                :disabled busy?
+                :on-change #(reset! webid (.. % -target -value))}]
+       [:div.grant-modes
+        (for [[m label] [[:read "Read"] [:append "Append"] [:write "Write"]]]
+          ^{:key m}
+          [:label [:input {:type "checkbox"
+                           :checked (contains? @modes m)
+                           :on-change #(toggle! m)}] label])]
+       [:button.primary
+        {:disabled (or busy? (not valid?) (empty? @modes))
+         :on-click (fn []
+                     (state/grant-agent!
+                      (str/trim @webid)
+                      (into {} (for [m [:read :append :write]] [m (contains? @modes m)])))
+                     (reset! webid ""))}
+        (if busy? "Applying…" "Grant")]])))
+
+(defn- propagation-note []
+  (when-let [{:keys [child reached?]} (:propagation @state/db)]
+    [:p {:class (if reached? "hint" "warn")}
+     (if reached?
+       (str "Checked “" child "” inside this folder: the grant reached it.")
+       (str "Checked “" child "” inside this folder: the grant did NOT reach
+             it. This server doesn't extend a container's access to its
+             contents — grant on the items themselves."))]))
+
+(defn- sharing-pane []
+  (let [{:keys [status public agents message url]} (:access @state/db)
+        busy? (:access-busy? @state/db)
+        public-read? (boolean (:read public))]
+    [:div.sharing
+     [:h2 "Sharing"]
+     (case status
+       :loading [:p.hint "Checking…"]
+
+       ;; being refused is the normal answer for anything you don't own,
+       ;; so explain it rather than presenting it as a fault
+       :denied [:p.hint "Only someone with control access can see how this
+                         resource is shared — so this is someone else's to
+                         change, not yours."]
+
+       :ready
+       [:<>
+        [:dl
+         [:dt "Everyone"]
+         [:dd (if public
+                [modes-granted public]
+                [:span.unreported "not reported by this server"])]]
+        [:label.public-toggle
+         [:input {:type "checkbox"
+                  :checked public-read?
+                  :disabled busy?
+                  :on-change (fn []
+                               (if public-read?
+                                 (state/set-public! {:read false})
+                                 ;; widening access to everyone is the one
+                                 ;; irreversible thing here — confirm it
+                                 (state/ask-public! {:read true})))}]
+         "Readable by anyone"]
+
+        (if (seq agents)
+          [:dl
+           (for [[agent-webid access] (sort agents)]
+             ^{:key agent-webid}
+             [:<>
+              [:dt.agent {:title agent-webid} (short-webid agent-webid)]
+              [:dd
+               [modes-granted access]
+               [:button.subtle.revoke
+                {:disabled busy?
+                 :title (str "Remove all access for " agent-webid)
+                 :on-click #(state/revoke-agent! agent-webid)}
+                "Revoke"]]])]
+          [:p.hint "No individual people have been given access."])
+
+        [add-person]
+        [propagation-note]
+        (when (str/ends-with? (or url "") "/")
+          [:p.hint "Granting here covers the folder. Whether it also covers
+                    what's inside depends on the server — the check above
+                    says which."])]
+
+       nil)
+     (when (and (= :denied status) message)
+       [:details.raw-headers
+        [:summary "Why"]
+        [:p.mono message]])]))
+
 (defn- metadata-pane [{:keys [url status ok? content-type headers size modified]}]
   [:aside.meta
    [:h2 "Details"]
@@ -144,7 +258,8 @@
     [:summary "All response headers"]
     [:dl
      (for [[k v] (sort headers)]
-       ^{:key k} [:<> [:dt k] [:dd.mono v]])]]])
+       ^{:key k} [:<> [:dt k] [:dd.mono v]])]]
+   [sharing-pane]])
 
 (defn- content-pane [{:keys [text object-url image? content-type name url]}]
   [:section.content
@@ -195,6 +310,11 @@
      [:ul.menu {:style {:left (str x "px") :top (str y "px")}}
       [:li [:button {:on-click #(state/open-entry! entry)}
             (if (:container? entry) "Open folder" "Open")]]
+      (when (:container? entry)
+        [:li [:button {:on-click (fn []
+                                   (state/hide-menu!)
+                                   (state/show-details! entry))}
+              "Details and sharing"]])
       [:li [:button {:on-click (fn []
                                  (.writeText js/navigator.clipboard (:url entry))
                                  (state/hide-menu!))}
@@ -205,6 +325,21 @@
             "Open raw in new tab"]]
       [:li.sep]
       [:li [:button.danger {:on-click #(state/ask-delete! entry)} "Delete…"]]]]))
+
+(defn- confirm-public []
+  (when-let [access (:confirm-public @state/db)]
+    [:div.modal-backdrop {:on-click state/cancel-public!}
+     [:div.modal {:on-click (fn [^js e] (.stopPropagation e))}
+      [:h2 "Make this readable by anyone?"]
+      [:p.url (:url (:access @state/db))]
+      [:p.warning
+       "Anyone on the web will be able to read this without signing in,
+        and you can't know who already has. Revoking later doesn't undo
+        a copy someone has taken."]
+      [:div.modal-actions
+       [:button {:on-click state/cancel-public!} "Cancel"]
+       [:button.danger {:on-click #(state/set-public! access)}
+        "Make public"]]]]))
 
 (defn- confirm-delete []
   (when-let [{:keys [name container? url]} (:confirm @state/db)]
@@ -224,12 +359,29 @@
 ;; ---------------------------------------------------------------------------
 ;; Shell
 
+(defn- address-bar []
+  (r/with-let [draft (r/atom "")]
+    [:div.address
+     [:input {:type "url"
+              :placeholder "Go to any pod URL — https://…/ for a folder"
+              :value @draft
+              :spell-check false
+              :on-change #(reset! draft (.. % -target -value))
+              :on-key-down #(when (= "Enter" (.-key %))
+                              (state/open-url! @draft))}]
+     [:button.subtle {:on-click #(state/open-url! @draft)
+                      :title "Go"} "→"]]))
+
 (defn- header []
   (let [{:keys [webid loading?]} @state/db]
     [:header.app-header
      [:div.brand "Pod Browser"]
      [breadcrumbs]
+     [address-bar]
      [:div.session
+      [:button.subtle {:on-click state/show-current-details!
+                       :title "Details and sharing for this folder"}
+       "ⓘ"]
       [:button.subtle {:on-click state/refresh!
                        :disabled loading?
                        :title "Refresh"}
@@ -258,4 +410,5 @@
         [listing]
         [viewer]]
        [context-menu]
-       [confirm-delete]])))
+       [confirm-delete]
+       [confirm-public]])))

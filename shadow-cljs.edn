@@ -25,7 +25,8 @@
    :release
    {:closure-defines
     {solid-shared.auth/client-id
-     "https://insano10.github.io/solid-social/feed/clientid.jsonld"}}
+     "https://insano10.github.io/solid-social/feed/clientid.jsonld"
+     solid-shared.auth/storage-prefix "solidSocialFeed:"}}
 
    ;; Local development uses a separate published identity whose
    ;; redirect URIs are localhost only, so the real app's identity never
@@ -33,15 +34,15 @@
    ;; the identity provider, not the browser — hence a public URL for a
    ;; localhost-only client.
    ;;
-   ;; DISABLED until a Pages deploy publishes the new /feed/ layout. The
-   ;; document below does not exist yet, and a client_id the provider
-   ;; can't dereference fails the whole login with a 500 — so dev falls
-   ;; back to dynamic registration meanwhile. Re-enable both this and
-   ;; the browser's :dev block after the first successful deploy.
-   #_:dev
-   #_{:closure-defines
-      {solid-shared.auth/client-id
-       "https://insano10.github.io/solid-social/feed/clientid-dev.jsonld"}}}
+   ;; The client-id line is discarded until a Pages deploy publishes the
+   ;; /feed/ layout: a client_id the provider can't dereference fails the
+   ;; whole login with a 500, so dev falls back to dynamic registration
+   ;; meanwhile. Re-enable it, and the browser's, after a deploy.
+   :dev
+   {:closure-defines
+    {solid-shared.auth/storage-prefix "solidSocialFeed:"
+     #_solid-shared.auth/client-id
+     #_"https://insano10.github.io/solid-social/feed/clientid-dev.jsonld"}}}
 
   ;; The pod file browser, published at /browser/. Shares only
   ;; solid-shared.*, and has its own client identity so a consent screen
@@ -55,12 +56,11 @@
    :release
    {:closure-defines
     {solid-shared.auth/client-id
-     "https://insano10.github.io/solid-social/browser/clientid.jsonld"}}
+     "https://insano10.github.io/solid-social/browser/clientid.jsonld"
+     solid-shared.auth/storage-prefix "podBrowser:"}}
 
-   ;; Enable once a Pages deploy has published the document below —
-   ;; until then a dev build can't use it, and dynamic registration
-   ;; (the default) is what works.
-   #_:dev
-   #_{:closure-defines
-      {solid-shared.auth/client-id
-       "https://insano10.github.io/solid-social/browser/clientid-dev.jsonld"}}}}}
+   :dev
+   {:closure-defines
+    {solid-shared.auth/storage-prefix "podBrowser:"
+     #_solid-shared.auth/client-id
+     #_"https://insano10.github.io/solid-social/browser/clientid-dev.jsonld"}}}}}

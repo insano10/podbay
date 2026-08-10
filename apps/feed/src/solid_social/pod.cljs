@@ -38,6 +38,20 @@
 
 ;; ---------------------------------------------------------------------------
 ;; Discovery
+;;
+;; Everything here distinguishes two things that are easy to conflate:
+;; "the server told us there is nothing" and "we couldn't ask". The first
+;; is an answer worth acting on — a pod with no type index really has
+;; none, so fall back to the convention. The second is ignorance, and
+;; guessing past it is how a transient 502 turns into a feed that quietly
+;; shows the wrong container, or none at all.
+
+(defn- missing?
+  "True when the server answered, and its answer was that there is no
+   such document. Anything else — 401, 403, 502, a dropped connection —
+   is a failure to find out."
+  [e]
+  (= 404 (some-> ^js e .-statusCode)))
 
 ;; A WebID profile is needed twice over — once for the storage root, once
 ;; for the display name and avatar — and the storage root is needed again
@@ -48,22 +62,36 @@
 (defonce ^:private profile-cache (atom {}))
 
 (defn- profile+
-  "The WebID profile document as a dataset, or nil if it can't be read."
+  "The WebID profile document as a dataset. Rejects if it can't be read."
   [webid]
   (or (get @profile-cache webid)
       (let [ds+ (-> (sc/getSolidDataset webid (opts))
-                    (p/catch (fn [_] nil)))]
+                    (p/catch (fn [e]
+                               ;; a cached failure would poison the whole
+                               ;; session, so forget it and let the next
+                               ;; caller try again
+                               (swap! profile-cache dissoc webid)
+                               (p/rejected e))))]
         (swap! profile-cache assoc webid ds+)
         ds+)))
 
-(defn- profile-thing+ [webid]
-  (p/let [ds (profile+ webid)]
-    (when ds
-      (sc/getThing ds webid))))
+(defn- profile-thing+
+  "The subject of a WebID's profile, or nil if the document genuinely
+   isn't there. Rejects if we simply couldn't read it."
+  [webid]
+  (-> (p/let [ds (profile+ webid)]
+        (sc/getThing ds webid))
+      (p/catch (fn [e]
+                 (if (missing? e) nil (p/rejected e))))))
 
 (defn pod-root+
   "Resolve the storage root for a WebID via pim:storage in the profile,
-   falling back to the WebID's origin (correct for most pod providers)."
+   falling back to the WebID's origin (correct for most pod providers).
+
+   That fallback applies when the profile is readable and simply doesn't
+   say — not when it couldn't be read. Guessing an origin for a profile
+   we failed to fetch would point every later request at a container
+   that may not be the right one."
   [webid]
   (p/let [thing (profile-thing+ webid)
           storage (when thing (sc/getUrl thing sv/pim-storage))]
@@ -81,14 +109,21 @@
 (defonce ^:private type-index-cache (atom {}))
 
 (defn- type-index+
-  "The WebID's public type index as a dataset, or nil if it has none."
+  "The WebID's public type index as a dataset — nil when the profile
+   links none, or links one that isn't there. Rejects if it exists but
+   couldn't be read, since falling back to our own convention on a
+   transient failure would read posts from the wrong container."
   [webid]
   (or (get @type-index-cache webid)
       (let [ds+ (-> (p/let [thing (profile-thing+ webid)
                             url (when thing (sc/getUrl thing v/solid-publicTypeIndex))]
                       (when url
-                        (sc/getSolidDataset url (opts))))
-                    (p/catch (fn [_] nil)))]
+                        (-> (sc/getSolidDataset url (opts))
+                            (p/catch (fn [e]
+                                       (if (missing? e) nil (p/rejected e)))))))
+                    (p/catch (fn [e]
+                               (swap! type-index-cache dissoc webid)
+                               (p/rejected e))))]
         (swap! type-index-cache assoc webid ds+)
         ds+)))
 
@@ -96,14 +131,13 @@
   "The container registered for `class-iri` in the WebID's public type
    index, or nil if there's no index or no registration for that class."
   [webid class-iri]
-  (-> (p/let [ds (type-index+ webid)]
-        (when ds
-          (->> (array-seq (sc/getThingAll ds))
-               (filter #(some #{class-iri}
-                              (array-seq (sc/getUrlAll % v/solid-forClass))))
-               (keep #(sc/getUrl % v/solid-instanceContainer))
-               first)))
-      (p/catch (fn [_] nil))))
+  (p/let [ds (type-index+ webid)]
+    (when ds
+      (->> (array-seq (sc/getThingAll ds))
+           (filter #(some #{class-iri}
+                          (array-seq (sc/getUrlAll % v/solid-forClass))))
+           (keep #(sc/getUrl % v/solid-instanceContainer))
+           first))))
 
 (defn forget-caches!
   "Drop cached pod lookups — call on logout, since the next session may
@@ -124,26 +158,72 @@
           (str root app-path "posts/")))))
 
 (defn- ensure-container+
-  "Create a container if it doesn't exist; ignore 'already exists' errors."
+  "Create a container if it isn't already there.
+
+   A conflict means it exists, which is the desired state — anything
+   else (no permission, say) is left to surface from the write that
+   follows, but is logged here so the cause isn't lost behind a
+   confusing downstream error."
   [url]
   (-> (sc/createContainerAt url (opts))
-      (p/catch (fn [_] nil))))
+      (p/catch (fn [e]
+                 (when-not (#{409 412} (some-> ^js e .-statusCode))
+                   (js/console.warn "Couldn't create container" url e))
+                 nil))))
 
 ;; ---------------------------------------------------------------------------
 ;; Profiles
 
-(defn load-profile+
-  "Fetch display name and avatar from a WebID profile document.
-   Resolves to {:name ... :avatar ...} (both possibly nil). Shares the
-   profile fetch with pod-root+ rather than requesting it a second time."
+(defn- details-of
+  "Display name and avatar, as far as one document knows them."
+  [thing]
+  (when thing
+    {:name (or (sc/getStringNoLocale thing v/foaf-name)
+               (sc/getStringNoLocale thing v/vcard-fn))
+     :avatar (or (sc/getUrl thing v/vcard-hasPhoto)
+                 (sc/getUrl thing v/foaf-img))}))
+
+(defn- extended-details+
+  "A WebID document has to be public — an app must read it to discover
+   where to log you in, before you've authenticated to anything. So the
+   convention is to keep it to the plumbing and link the personal
+   details with rdfs:seeAlso, in a document whose access you control.
+   Inrupt's pods are provisioned that way; solidcommunity.net's put
+   everything in the card.
+
+   Only consulted when the WebID document has no name of its own, since
+   it costs another round trip. Returns nil if those documents aren't
+   readable by us, which is a perfectly ordinary outcome — they're the
+   private half by design."
   [webid]
-  (-> (p/let [thing (profile-thing+ webid)]
-        (when thing
-          {:name (or (sc/getStringNoLocale thing v/foaf-name)
-                     (sc/getStringNoLocale thing v/vcard-fn))
-           :avatar (or (sc/getUrl thing v/vcard-hasPhoto)
-                       (sc/getUrl thing v/foaf-img))}))
-      (p/catch (fn [_] nil))))
+  (-> (p/let [profiles (sc/getProfileAll webid (opts))
+              alternates (array-seq (.-altProfileAll ^js profiles))]
+        (->> alternates
+             (keep #(details-of (sc/getThing % webid)))
+             (filter :name)
+             first))
+      (p/catch (fn [e]
+                 (js/console.warn "Couldn't read extended profile of" webid e)
+                 nil))))
+
+(defn load-profile+
+  "Fetch display name and avatar for a WebID.
+   Resolves to {:name ... :avatar ...} (both possibly nil). Shares the
+   WebID document with pod-root+ rather than requesting it a second
+   time, and only reaches for linked profiles when it must."
+  [webid]
+  (-> (p/let [thing (profile-thing+ webid)
+              card (details-of thing)]
+        (if (:name card)
+          card
+          (p/let [extended (extended-details+ webid)]
+            {:name (or (:name card) (:name extended))
+             :avatar (or (:avatar card) (:avatar extended))})))
+      ;; a name and a picture are decoration: falling back to the WebID
+      ;; host is a fine outcome, so this one stays forgiving
+      (p/catch (fn [e]
+                 (js/console.warn "Couldn't read profile of" webid e)
+                 nil))))
 
 ;; ---------------------------------------------------------------------------
 ;; Posts
@@ -245,7 +325,11 @@
                   _ (sc/saveSolidDatasetAt index-url (sc/setThing ds reg) (opts))]
             ;; the cached copy is now a version behind
             (swap! type-index-cache dissoc webid))))
-      (p/catch (fn [_] nil))))
+      ;; genuinely best-effort: publishing where posts live is a courtesy
+      ;; to other apps, and must never fail the post itself
+      (p/catch (fn [e]
+                 (js/console.warn "Couldn't register the posts container" e)
+                 nil))))
 
 (defn- media-container
   "Attachments live in a media/ container *inside* the posts container,
@@ -294,7 +378,10 @@
         (if thing
           (vec (array-seq (sc/getUrlAll thing v/as-following)))
           []))
-      (p/catch (fn [_] []))))
+      ;; no contacts document yet is the normal state before you follow
+      ;; anyone. Any other failure must not silently unfollow everyone.
+      (p/catch (fn [e]
+                 (if (missing? e) [] (p/rejected e))))))
 
 (defn save-contacts+
   "Overwrite the contacts resource with the given list of WebIDs."
