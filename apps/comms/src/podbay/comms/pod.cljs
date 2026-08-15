@@ -210,16 +210,47 @@
       (p/let [root (pod-root+ webid)]
         {:containers [(str root app-path "posts/")] :instances []}))))
 
-(defn- write-container+
-  "Where a *new* post goes. Reading merges every registered source, but
-   a write has to pick one: the first registered container, else the
-   convention. That's the same resolution a reader tries first, so a
-   post always lands somewhere its author's own feed will find it."
+(defn post-containers+
+  "Every container this person could post into: each one registered for
+   as:Note, or our convention if their pod registers none.
+
+   More than one is the interesting case — a pod can keep posts for
+   different audiences in different containers, since a container is the
+   unit access control inherits through."
   [webid]
   (p/let [{:keys [containers]} (registrations+ webid v/as-Note)]
-    (or (first containers)
-        (p/let [root (pod-root+ webid)]
-          (str root app-path "posts/")))))
+    (if (seq containers)
+      (vec containers)
+      (p/let [root (pod-root+ webid)]
+        [(str root app-path "posts/")]))))
+
+(defn- write-container+
+  "Where a new post goes when the author hasn't chosen. Reading merges
+   every registered source, but a write has to pick one: the first
+   registered container, else the convention. That's the same
+   resolution a reader tries first, so a post always lands somewhere
+   its author's own feed will find it."
+  [webid]
+  (p/let [containers (post-containers+ webid)]
+    (first containers)))
+
+(def ^:private universal-access sc/universalAccess)
+
+(defn readers+
+  "Who, other than you, can read a container — enough to tell whether
+   what you're about to write is as private as you think.
+
+   Rejects when the access control resource can't be read, which needs
+   control access and so is normal on a pod that isn't yours."
+  [url self-webid]
+  (p/let [public (.getPublicAccess ^js universal-access url (opts))
+          agents (.getAgentAccessAll ^js universal-access url (opts))
+          others (when agents
+                   (->> (array-seq (js/Object.keys agents))
+                        (remove #(= % self-webid))
+                        (filter #(some-> ^js (aget agents %) .-read))))]
+    {:public? (boolean (some-> ^js public .-read))
+     :agents (count others)}))
 
 (defn- ensure-container+
   "Create a container if it isn't already there.
@@ -442,9 +473,11 @@
 
 (defn save-post+
   "Upload any media files, then save the post as a new Turtle resource
-   named by its timestamp. Resolves when the post is stored."
-  [webid content files]
-  (p/let [posts-url (write-container+ webid)
+   named by its timestamp. Resolves when the post is stored.
+
+   `container` names where it goes; nil falls back to write-container+."
+  [webid content files container]
+  (p/let [posts-url (or container (write-container+ webid))
           media-url (media-container posts-url)
           _ (ensure-container+ posts-url)
           _ (when (seq files) (ensure-container+ media-url))

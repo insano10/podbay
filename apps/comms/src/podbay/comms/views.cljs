@@ -64,6 +64,72 @@
 ;; ---------------------------------------------------------------------------
 ;; Composer
 
+(defn- source-label
+  "A short, recognisable form of the container a post came from — the
+   last couple of path segments, since the origin is already obvious
+   from the author and the full URL is in the tooltip."
+  [url]
+  (try
+    (->> (str/split (.-pathname (js/URL. url)) #"/")
+         (remove str/blank?)
+         (take-last 2)
+         (str/join "/"))
+    (catch :default _ url)))
+
+(defn- audience-line
+  "Who can read the container a post is headed for. Choosing where to
+   post doesn't make it private; this says what the access control
+   actually is, before anything is written."
+  []
+  (let [{:keys [status public? agents code message]} (:destination-access @state/db)]
+    (case status
+      :loading [:span.audience.checking "Checking who can read this…"]
+      :unknown [:span.audience {:title message}
+                (case code
+                  404 "This folder doesn't exist yet — posting will create it."
+                  403 "Seeing who can read this needs control access, which you
+                       don't have here."
+                  401 "Not signed in for this pod."
+                  [:<> "Couldn't check who can read this. "
+                   [:button.link {:on-click state/recheck-destination!} "Try again"]])]
+      :ready (cond
+               public?
+               [:span.audience.wide "⚠ Anyone on the web can read this folder."]
+
+               (pos? agents)
+               [:span.audience (str "Shared with " agents
+                                    (if (= 1 agents) " person." " people."))]
+
+               :else
+               [:span.audience "Only you can read this folder."])
+      nil)))
+
+(defn- destination-picker []
+  (let [{:keys [destinations destination destinations-status]} @state/db]
+    (cond
+      ;; failing to work out where a post goes must not render as
+      ;; nothing — that reads as "there is nowhere", not "we couldn't ask"
+      (= :failed destinations-status)
+      [:div.destination
+       [:span.audience "Couldn't work out where this will be posted. "
+        [:button.link {:on-click state/recheck-destination!} "Try again"]]]
+
+      destination
+      [:div.destination
+       ;; always name the destination, even when there's only one — the
+       ;; access line beneath it is meaningless without a subject
+       (if (> (count destinations) 1)
+         [:label "Posting into "
+          [:select {:value destination
+                    :on-change #(state/choose-destination! (.. % -target -value))}
+           (for [url destinations]
+             ^{:key url} [:option {:value url} (source-label url)])]]
+         [:span "Posting into "
+          [:span.where {:title destination} (source-label destination)]])
+       [audience-line]]
+
+      :else nil)))
+
 (defn composer []
   (r/with-let [text (r/atom "")
                files (r/atom [])
@@ -96,7 +162,8 @@
         [:button.primary
          {:disabled (not can-post?)
           :on-click #(state/submit-post! (str/trim @text) @files clear!)}
-         (if posting? "Publishing…" "Post")]]])))
+         (if posting? "Publishing…" "Post")]]
+       [destination-picker]])))
 
 ;; ---------------------------------------------------------------------------
 ;; Contacts
@@ -227,20 +294,7 @@
       :else
       [:a.attachment-link {:href url :target "_blank" :rel "noopener"} url])))
 
-(defn- source-label
-  "A short, recognisable form of the container a post came from — the
-   last couple of path segments, since the origin is already obvious
-   from the author and the full URL is in the tooltip."
-  [url]
-  (try
-    (let [segments (->> (str/split (.-pathname (js/URL. url)) #"/")
-                        (remove str/blank?))]
-      (if (> (count segments) 2)
-        (str "…/" (str/join "/" (take-last 2 segments)))
-        (str/join "/" segments)))
-    (catch :default _ url)))
-
-(defn- post-card [{:keys [id author content published attachments source]}]
+(defn- post-card [{:keys [author content published attachments source]}]
   (let [avatar (get-in @state/db [:profiles author :avatar])]
     [:article.post
      [:header
@@ -252,9 +306,9 @@
        [:a.author {:href author :target "_blank" :rel "noopener"
                    :title author}
         (display-name author)]
-       [:time (format-date published)]
-       (when source
-         [:span.origin {:title source} (source-label source)])]]
+       [:time (format-date published)]]
+      (when source
+        [:span.origin {:title source} (source-label source)])]
      (when (seq content)
        (into [:div.content]
              (for [para (str/split-lines content)]
@@ -262,9 +316,7 @@
      (when (seq attachments)
        (into [:div.attachments]
              (for [url attachments]
-               ^{:key url} [attachment-view url])))
-     [:footer
-      [:a.subtle {:href id :target "_blank" :rel "noopener"} "source"]]]))
+               ^{:key url} [attachment-view url])))]))
 
 (defn- unreadable-notice []
   (let [unreadable (:unreadable @state/db)]

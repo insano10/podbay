@@ -406,10 +406,28 @@ than a container. Merging them is what lets this feed pick up posts a
 point of discovery. Posts registered in more than one place are
 deduplicated by their URL.
 
-A write has to choose one, so `pod/write-container+` takes the first
-registered container, else the convention — the same source a reader
-tries first, so a post always lands somewhere its author's own feed
-will find it.
+A write has to choose one. When a pod registers several containers the
+composer offers them, since a container is the unit access control
+inherits through — so separate containers are how posts for different
+audiences are kept apart. Left alone, `pod/write-container+` takes the
+first registered container, else the convention: the same source a
+reader tries first, so a post always lands somewhere its author's own
+feed will find it.
+
+**The composer says who can read the chosen container** before anything
+is written — "Only you", "Shared with 2 people", or a warning that
+anyone on the web can. Putting a post in a folder called `private`
+doesn't make it private; its access control does, and that gap is
+exactly where a destination picker would otherwise mislead. Reading
+that needs control access, so on a pod that isn't yours it says it
+can't tell rather than guessing.
+
+Worth knowing that a container registered in the **public** type index
+advertises its existence and location to anyone, even when its contents
+are protected. Audience-segregated containers may belong in
+`solid:privateTypeIndex` instead — though then only people you share
+that index with can discover them, and Solid has no settled pattern for
+that.
 
 `load-posts+` rejects only when **every** source fails. One unreadable
 source among several shouldn't blank the rest, since another app's
@@ -738,11 +756,10 @@ keeping applied consistently.
 
 - **Comms doesn't manage access; Airlock does.** New resources inherit
   your pod's defaults, which usually means private, so friends can't see
-  your posts until the posts container is shared with them. Airlock can
-  now do that — open the container, ⓘ, grant their WebID read — but
-  publishing a post and sharing it remain two separate acts, and Comms
-  gives no hint that what you just wrote is unreadable by the people you
-  wrote it for.
+  your posts until the posts container is shared with them. Airlock does
+  that — open the container, ⓘ, grant their WebID read. Comms now at
+  least *says* who will be able to read what you're writing (see below),
+  but publishing and sharing remain two separate acts.
 - **No pagination.** Every post from every contact is loaded on refresh,
   and since each post is its own resource, that's one request per post
   (they run in parallel, but the round trips add up). Fine for

@@ -15,6 +15,10 @@
            :posts-by-author {}   ; webid -> that author's posts
            :profiles {}          ; webid -> {:name :avatar}
            :unreadable {}        ; webid -> why their pod couldn't be read
+           :destinations []      ; containers you could post into
+           :destination nil      ; the one chosen for the next post
+           :destination-access nil ; who can read it
+           :destinations-status nil ; :loading | :ready | :failed
            :loading-feed? false
            :posting? false
            :error nil}))
@@ -72,6 +76,8 @@
                                            (or (some-> ^js e .-message) (str e))))))))
                  authors))))
 
+(declare load-destinations!)
+
 (defn refresh-feed!
   "Reload posts from the user's own pod and every contact's pod,
    merged and sorted newest-first."
@@ -82,16 +88,75 @@
     (swap! db assoc :loading-feed? true :error nil)
     ;; drop anyone no longer followed before fetching
     (rebuild-feed! (select-keys (:posts-by-author @db) authors))
+    ;; where you can post, and who can read it, are as prone to a
+    ;; transient failure as the feed itself — so refresh re-checks them
+    (when-let [webid (:webid @db)] (load-destinations! webid))
     (-> (fetch-authors! authors)
         (p/then #(swap! db assoc :loading-feed? false))
         (p/catch #(set-error! (str "Couldn't load feed: " (.-message %)))))))
+
+(defn- load-destination-access!
+  "Who can read the container a post is about to go into. Choosing where
+   to post doesn't make it private — the container's access control does
+   — so say which it is before anything is written."
+  [url]
+  (swap! db assoc :destination-access {:url url :status :loading})
+  (let [current? #(= url (:url (:destination-access @db)))]
+    (-> (pod/readers+ url (:webid @db))
+        (p/then (fn [summary]
+                  (when (current?)
+                    (swap! db assoc :destination-access
+                           (merge {:url url :status :ready} summary)))))
+        (p/catch (fn [e]
+                   (js/console.warn "Couldn't read access for" url e)
+                   (when (current?)
+                     ;; keep the status: "couldn't ask" and "you may not
+                     ;; ask" are different answers, and naming the wrong
+                     ;; one is worse than admitting we don't know
+                     (swap! db assoc :destination-access
+                            {:url url
+                             :status :unknown
+                             :code (some-> ^js e .-statusCode)
+                             :message (some-> ^js e .-message)})))))))
+
+(defn choose-destination! [url]
+  (swap! db assoc :destination url)
+  (load-destination-access! url))
+
+(defn load-destinations!
+  "Where this person can post. More than one means their pod registers
+   several containers for as:Note — different audiences, typically.
+
+   A failure here used to render nothing at all, which reads as 'no
+   destination exists' rather than 'we couldn't find out'."
+  [webid]
+  (swap! db assoc :destinations-status :loading)
+  (-> (pod/post-containers+ webid)
+      (p/then (fn [containers]
+                (swap! db assoc :destinations containers :destinations-status :ready)
+                ;; keep whatever was chosen if it's still on offer, so a
+                ;; refresh doesn't silently move where a post will go
+                (when-let [chosen (or (some #{(:destination @db)} containers)
+                                      (first containers))]
+                  (choose-destination! chosen))))
+      (p/catch (fn [e]
+                 (js/console.warn "Couldn't work out where to post" e)
+                 (swap! db assoc :destinations-status :failed)))))
+
+(defn recheck-destination!
+  "Ask again — the usual reason for a failure here is a pod that
+   answered badly a moment ago."
+  []
+  (if-let [url (:destination @db)]
+    (load-destination-access! url)
+    (when-let [webid (:webid @db)] (load-destinations! webid))))
 
 (defn submit-post!
   "Publish a post (text plus optional media files) to the user's own
    pod, then refresh the feed. Calls on-done once the post is saved."
   [content files on-done]
   (swap! db assoc :posting? true :error nil)
-  (-> (pod/save-post+ (:webid @db) content files)
+  (-> (pod/save-post+ (:webid @db) content files (:destination @db))
       (p/then (fn [_]
                 (swap! db assoc :posting? false)
                 (on-done)
@@ -139,6 +204,7 @@
            (let [webid (auth/web-id)]
              (swap! db assoc :webid webid :loading-feed? true :error nil)
              (swap! feed-run inc)
+             (load-destinations! webid)
              ;; Your own posts and your contact list are independent, and
              ;; on a slow pod every round trip is seconds — so start both
              ;; at once rather than making the feed wait on the contacts
