@@ -28,6 +28,7 @@
            :confirm nil         ; entry awaiting delete confirmation
            :creating nil        ; {:kind :file|:folder :name ""}
            :uploading nil       ; how many files are in flight
+           :revoking nil        ; a WebID awaiting revoke confirmation
            :moving nil          ; {:entry :target} while renaming/moving
            :move-busy? false
            :error nil}))
@@ -281,9 +282,27 @@
                    (swap! db assoc :access-busy? false)
                    (set-error! (describe (str "Couldn't change access for " webid) e)))))))
 
-(defn revoke-agent! [webid]
-  (grant-agent! webid {:read false :append false :write false
-                       :control-read false :control-write false}))
+(defn ask-revoke! [webid]
+  (swap! db assoc :revoking webid))
+
+(defn cancel-revoke! []
+  (swap! db assoc :revoking nil))
+
+(defn revoking-self?
+  "Is the agent about to be revoked the person doing the revoking?"
+  [webid]
+  (= webid (:webid @db)))
+
+(defn confirm-revoke! []
+  (when-let [webid (:revoking @db)]
+    (swap! db assoc :revoking nil)
+    ;; Never take control away from yourself. Control is what lets you
+    ;; read and rewrite the access control resource, so removing it is
+    ;; the one change this app cannot undo — you'd be locked out of the
+    ;; rules governing your own file, with no way back through the UI.
+    (grant-agent! webid
+                  (cond-> {:read false :append false :write false}
+                    (not (revoking-self? webid)) (assoc :control false)))))
 
 (defn set-public! [access]
   (when-let [url (:url (:access @db))]

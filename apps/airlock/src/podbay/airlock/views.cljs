@@ -167,18 +167,31 @@
 ;; Viewer: content in one pane, metadata beside it
 
 (def ^:private access-modes
-  [[:read "Read"] [:append "Append"] [:write "Write"]
-   [:control-read "See sharing"] [:control-write "Change sharing"]])
+  [[:read "Read"
+    "Allowed to read this resource."]
+   [:append "Append"
+    "Allowed to add to the resource, without reading it or replacing what's there
+e.g. an inbox that lets strangers leave a message they can't then read back."]
+   [:write "Write"
+    "Allowed to change or delete the resource. Includes the ability to append."]
+   [:control-read "See sharing"
+    "Allowed to read the access control resource
+e.g. to see who this resource is shared with."]
+   [:control-write "Change sharing"
+    "Allowed to change who this resource is shared with.
+Note: Losing this permission means losing the ability to grant it back."]])
 
 (defn- modes-granted
   "The permissions actually granted, as chips. An access map with
    everything false is a real answer — it means no access — so say so
    rather than rendering nothing."
   [access]
-  (let [granted (for [[k label] access-modes :when (get access k)] label)]
+  (let [granted (for [[k label explain] access-modes :when (get access k)]
+                  [label explain])]
     (if (seq granted)
       (into [:span.modes]
-            (for [label granted] ^{:key label} [:span.mode label]))
+            (for [[label explain] granted]
+              ^{:key label} [:span.mode {:title explain} label]))
       [:span.modes [:span.mode.none "No access"]])))
 
 (defn- add-person []
@@ -262,8 +275,8 @@
                [modes-granted access]
                [:button.subtle.revoke
                 {:disabled busy?
-                 :title (str "Remove all access for " agent-webid)
-                 :on-click #(state/revoke-agent! agent-webid)}
+                 :title (str "Remove access for " agent-webid)
+                 :on-click #(state/ask-revoke! agent-webid)}
                 "Revoke"]]])]
           [:p.hint "No individual people have been given access."])
 
@@ -476,6 +489,29 @@
          [:button.primary {:on-click state/confirm-move! :disabled busy?}
           (if busy? "Moving…" "Move")]]]])))
 
+(defn- confirm-revoke []
+  (when-let [webid (:revoking @state/db)]
+    (let [self? (state/revoking-self? webid)]
+      [:div.modal-backdrop {:on-click state/cancel-revoke!}
+       [:div.modal {:on-click (fn [^js e] (.stopPropagation e))}
+        [:h2 (if self? "Remove your own access?" "Remove access?")]
+        [:p [:strong (short-webid webid)]]
+        [:p.url webid]
+        (if self?
+          [:<>
+           [:p.warning
+            "This removes your ability to read and change this resource."]
+           [:p.hint
+            "Your control over its sharing is kept, so you can grant
+             yourself access again — without it you would be locked out
+             of the rules governing your own file, with no way back."]]
+          [:p.warning
+           "This removes read, write and control for this person. They
+            keep nothing but whatever public access the resource has."])
+        [:div.modal-actions
+         [:button {:on-click state/cancel-revoke!} "Cancel"]
+         [:button.danger {:on-click state/confirm-revoke!} "Remove access"]]]])))
+
 (defn- confirm-public []
   (when-let [access (:confirm-public @state/db)]
     [:div.modal-backdrop {:on-click state/cancel-public!}
@@ -562,5 +598,6 @@
        [context-menu]
        [confirm-delete]
        [confirm-public]
+       [confirm-revoke]
        [move-dialog]
        [new-dialog]])))

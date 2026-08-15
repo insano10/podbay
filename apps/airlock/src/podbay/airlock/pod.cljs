@@ -229,14 +229,26 @@
 
 (defn- ->js-access
   "Only the modes actually named are sent, so a change can adjust one
-   permission without restating the others."
+   permission without restating the others.
+
+   Control is a *single* flag on the way in, deliberately. The universal
+   API is modelled on ACP, which separates reading an access control
+   resource from changing it; WAC has one acl:Control and solid-client
+   throws outright if the two are set differently. Nothing here wants
+   them to differ, so collapsing them makes the unsupported combination
+   unrepresentable rather than merely avoided — the difference would
+   otherwise work on an ESS pod and throw on a CSS one.
+
+   Reading keeps them separate (see access->map): on ACP they genuinely
+   can differ, and hiding that would misreport the pod."
   [m]
   (let [o #js {}]
     (when (contains? m :read) (aset o "read" (boolean (:read m))))
     (when (contains? m :append) (aset o "append" (boolean (:append m))))
     (when (contains? m :write) (aset o "write" (boolean (:write m))))
-    (when (contains? m :control-read) (aset o "controlRead" (boolean (:control-read m))))
-    (when (contains? m :control-write) (aset o "controlWrite" (boolean (:control-write m))))
+    (when (contains? m :control)
+      (aset o "controlRead" (boolean (:control m)))
+      (aset o "controlWrite" (boolean (:control m))))
     o))
 
 (defn set-agent-access+

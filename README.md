@@ -203,6 +203,26 @@ What it does today:
   something readable by anyone. Widening access to everyone asks for
   confirmation, because it can't be undone — revoking later doesn't
   retrieve a copy someone already took.
+- **You cannot lock yourself out.** Revoking asks first, and revoking
+  your *own* WebID removes read, append and write but **keeps
+  `controlRead`/`controlWrite`**. Control is what lets you read and
+  rewrite a resource's access control resource, so giving it up is the
+  one change the app can't undo: you'd be locked out of the rules
+  governing your own file with no way back through the UI. Recovering
+  needs hand-editing the `.acl`, or deleting it so the resource
+  re-inherits from its container — possible, but not something a click
+  should be able to require.
+- The permission chips are a **readout, not controls**. Each explains
+  itself on hover; "See sharing" is `controlRead` and "Change sharing"
+  is `controlWrite`. ACP separates them, WAC has a single `acl:Control`
+  covering both, and the universal access API exposes ACP's split.
+
+  Reading keeps them apart, since on ACP they genuinely can differ and
+  collapsing them would misreport the pod. **Writing uses one
+  `:control` flag**, expanded to both on the way out, so the asymmetric
+  combination can't be constructed — solid-client *throws* on a WAC pod
+  if the two differ, which would otherwise be a change that works
+  against ESS and fails against CSS.
 - **A grant on a folder is verified, not assumed.** WAC inherits: a
   container's access covers what's inside unless a child overrides. ACP
   composes policies, and a container's own access need not be its
