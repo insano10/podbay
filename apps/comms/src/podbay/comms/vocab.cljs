@@ -9,13 +9,14 @@
 (def as-published (str as "published"))
 (def as-attachment (str as "attachment"))
 (def as-attributedTo (str as "attributedTo"))
+(def as-generator (str as "generator"))
 (def as-following (str as "following"))
 
 (def ^:private foaf "http://xmlns.com/foaf/0.1/")
 (def ^:private vcard "http://www.w3.org/2006/vcard/ns#")
 
 ;; Type indexes: how a pod advertises where each kind of data lives, so
-;; apps discover containers instead of assuming folder names.
+;; apps discover containers instead of assuming container names.
 (def ^:private solid "http://www.w3.org/ns/solid/terms#")
 
 (def solid-publicTypeIndex (str solid "publicTypeIndex"))

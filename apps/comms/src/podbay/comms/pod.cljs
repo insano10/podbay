@@ -21,7 +21,7 @@
 (def ^:private app-path
   "Where this app keeps its data in a pod when nothing else says
    otherwise. Namespaced under the suite so a later Podbay app can claim
-   its own folder without collisions. Only a fallback: a pod that
+   its own container without collisions. Only a fallback: a pod that
    publishes a type index decides for itself where posts live."
   "podbay/comms/")
 
@@ -140,7 +140,7 @@
     (or storage
         (str (.-origin (js/URL. webid)) "/"))))
 
-;; Nothing in Solid fixes where data lives — folder names are an
+;; Nothing in Solid fixes where data lives — container names are an
 ;; implementation detail, and two apps agreeing on one would be a
 ;; coincidence, not interoperability. What a pod publishes instead is a
 ;; *type index*: a document mapping an RDF class to the container holding
@@ -328,6 +328,7 @@
      :author (sc/getUrl thing v/as-attributedTo)
      :content (sc/getStringNoLocale thing v/as-content)
      :published (sc/getDatetime thing v/as-published)
+     :generator (sc/getUrl thing v/as-generator)
      :attachments (vec (array-seq (sc/getUrlAll thing v/as-attachment)))}))
 
 (defn- posts-in-container+
@@ -403,6 +404,23 @@
 ;; out unauthenticated and comes back 401. So media has to be fetched here,
 ;; with the session's fetch, and handed to the element as a blob: URL.
 
+(defn app-name+
+  "What an app calls itself, read from the client identifier document a
+   post names as its generator.
+
+   Those documents have to be public — an identity provider dereferences
+   one before it will log anyone in — so this resolves for *any* app that
+   uses a published identity, not just ours. Nil when it can't be read or
+   doesn't name itself; the caller falls back to the host."
+  [client-id-url]
+  (-> (p/let [resp (auth/auth-fetch client-id-url)]
+        (when (.-ok resp)
+          (p/let [doc (.json resp)]
+            (aget doc "client_name"))))
+      (p/catch (fn [e]
+                 (js/console.warn "Couldn't read app identity" client-id-url e)
+                 nil))))
+
 (defn media-url+
   "Fetch a media resource with the session's credentials and wrap the
    bytes in a local blob: URL suitable for an <img>/<video> src.
@@ -423,19 +441,31 @@
                                              :fetch auth/auth-fetch})]
     (sc/getSourceUrl saved)))
 
-(defn- post-thing [webid content published media-urls]
+(defn- post-thing
+  "The post itself. as:generator records which app wrote it, pointing at
+   this build's client identifier document — an identity the identity
+   provider already dereferences, so it costs nothing to reuse.
+
+   That matters once a pod's posts come from several apps: containers
+   belong to the person, not to an app, so provenance has to travel with
+   the post rather than being inferred from where it sits. Omitted when
+   the build has no published identity, since a dynamically registered
+   client is a different throwaway on every login and naming one would
+   be worse than saying nothing."
+  [webid content published media-urls]
   (reduce (fn [thing url] (sc/addUrl thing v/as-attachment url))
-          (-> (sc/createThing #js {:name "post"})
-              (sc/addUrl sv/rdf-type v/as-Note)
-              (sc/addStringNoLocale v/as-content content)
-              (sc/addDatetime v/as-published published)
-              (sc/addUrl v/as-attributedTo webid))
+          (cond-> (-> (sc/createThing #js {:name "post"})
+                      (sc/addUrl sv/rdf-type v/as-Note)
+                      (sc/addStringNoLocale v/as-content content)
+                      (sc/addDatetime v/as-published published)
+                      (sc/addUrl v/as-attributedTo webid))
+            (seq auth/client-id) (sc/addUrl v/as-generator auth/client-id))
           media-urls))
 
 (defn- register-posts-container!+
   "Advertise `container` as this person's home for as:Note in their
    public type index, so other apps can find these posts without knowing
-   anything about our folder names.
+   anything about our container names.
 
    Only ever adds a registration when the class is unclaimed: if some
    other app already registered a posts container, write-container+ has

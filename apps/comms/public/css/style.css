@@ -318,9 +318,15 @@ img.attachment, video.attachment {
    more than one place for as:Note. Pushed to the post's right edge and
    pinned to the top of the header, so it lines up with the author's
    name rather than centring itself against the taller avatar. */
-.post header .origin {
+.post header .tags {
   margin-left: auto;
   align-self: flex-start;
+  display: flex;
+  gap: 0.35rem;
+}
+
+.post header .origin,
+.post header .via {
   font-size: 0.7rem;
   color: var(--text-muted);
   border: 1px solid var(--border);
@@ -343,6 +349,14 @@ img.attachment, video.attachment {
 .audience.checking { font-style: italic; }
 .audience.wide { color: var(--error-text); font-weight: 500; }
 .destination .where { color: var(--text); font-weight: 500; }
+
+/* which app wrote a post — read from the client identifier document it
+   names as its as:generator. Tinted with the accent so it reads as a
+   different *kind* of fact from the container chip beside it. */
+.post header .via {
+  color: var(--accent);
+  border-color: var(--accent);
+}
 
 /* inline "try again" inside a sentence */
 .destination button.link {

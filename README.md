@@ -177,7 +177,7 @@ reimplementing the OIDC dance. Everything else is its own.
 
 What it does today:
 
-- **Listing** costs one request per folder, not one per file. A
+- **Listing** costs one request per container, not one per file. A
   container's own representation already describes its children — type,
   size, modification time — so `list-container+` reads all of it from
   the response it already has. Servers aren't obliged to publish those,
@@ -223,7 +223,7 @@ What it does today:
   combination can't be constructed — solid-client *throws* on a WAC pod
   if the two differ, which would otherwise be a change that works
   against ESS and fails against CSS.
-- **A grant on a folder is verified, not assumed.** WAC inherits: a
+- **A grant on a container is verified, not assumed.** WAC inherits: a
   container's access covers what's inside unless a child overrides. ACP
   composes policies, and a container's own access need not be its
   members'. `universalAccess` unifies the API, not the semantics — so
@@ -266,14 +266,14 @@ What it does today:
   A pod serves whatever type you declare, forever, so an honest "unknown
   bytes" beats a confident wrong answer. Names already present are
   skipped and reported rather than replaced.
-- **New file and folder**, from the toolbar above the listing. A new
+- **New file and container**, from the toolbar above the listing. A new
   file is created empty and opened straight into the editor, with its
   content type guessed from the extension — a pod stores whatever you
   declare and gets it wrong quietly, and Turtle served as `text/plain`
   won't parse as RDF for anyone. Creating over an existing name is
   refused rather than silently replacing it, since `PUT` would.
 - **Rename and move**, from the context menu — edit the last segment to
-  rename, or the path to relocate. Folders move everything inside them,
+  rename, or the path to relocate. Containers move everything inside them,
   depth-first.
 
   There is no `MOVE` in Solid, so it's a copy followed by a delete, in
@@ -375,7 +375,7 @@ everything sorted by `as:published`.
 
 ### Finding where posts live
 
-Solid mandates no folder layout, so `podbay/comms/` is an
+Solid mandates no container layout, so `podbay/comms/` is an
 implementation detail and not something another app could ever guess.
 Portability comes from the vocabulary (ActivityStreams, above) plus
 *discovery*: a pod advertises where each kind of data lives in its
@@ -383,7 +383,7 @@ Portability comes from the vocabulary (ActivityStreams, above) plus
 WebID profile as `solid:publicTypeIndex`.
 
 So the question the app asks is "where do this person's `as:Note`
-resources live?", never "what's in their `podbay/comms/` folder":
+resources live?", never "what's in their `podbay/comms/` container":
 
 ```turtle
 <#podbay-comms-posts>
@@ -416,7 +416,7 @@ feed will find it.
 
 **The composer says who can read the chosen container** before anything
 is written — "Only you", "Shared with 2 people", or a warning that
-anyone on the web can. Putting a post in a folder called `private`
+anyone on the web can. Putting a post in a container called `private`
 doesn't make it private; its access control does, and that gap is
 exactly where a destination picker would otherwise mislead. Reading
 that needs control access, so on a pod that isn't yours it says it

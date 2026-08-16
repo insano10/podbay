@@ -76,6 +76,16 @@
          (str/join "/"))
     (catch :default _ url)))
 
+(defn- app-label
+  "What to call the app that wrote a post. Its client identifier
+   document names itself; until that resolves — or if it never does —
+   the host is a reasonable stand-in."
+  [generator]
+  (let [known (get (:apps @state/db) generator)]
+    (if (string? known)
+      known
+      (try (.-host (js/URL. generator)) (catch :default _ generator)))))
+
 (defn- audience-line
   "Who can read the container a post is headed for. Choosing where to
    post doesn't make it private; this says what the access control
@@ -86,7 +96,7 @@
       :loading [:span.audience.checking "Checking who can read this…"]
       :unknown [:span.audience {:title message}
                 (case code
-                  404 "This folder doesn't exist yet — posting will create it."
+                  404 "This container doesn't exist yet — posting will create it."
                   403 "Seeing who can read this needs control access, which you
                        don't have here."
                   401 "Not signed in for this pod."
@@ -94,14 +104,14 @@
                    [:button.link {:on-click state/recheck-destination!} "Try again"]])]
       :ready (cond
                public?
-               [:span.audience.wide "⚠ Anyone on the web can read this folder."]
+               [:span.audience.wide "⚠ Anyone on the web can read this container."]
 
                (pos? agents)
                [:span.audience (str "Shared with " agents
                                     (if (= 1 agents) " person." " people."))]
 
                :else
-               [:span.audience "Only you can read this folder."])
+               [:span.audience "Only you can read this container."])
       nil)))
 
 (defn- destination-picker []
@@ -294,7 +304,7 @@
       :else
       [:a.attachment-link {:href url :target "_blank" :rel "noopener"} url])))
 
-(defn- post-card [{:keys [author content published attachments source]}]
+(defn- post-card [{:keys [author content published attachments source generator]}]
   (let [avatar (get-in @state/db [:profiles author :avatar])]
     [:article.post
      [:header
@@ -307,8 +317,11 @@
                    :title author}
         (display-name author)]
        [:time (format-date published)]]
-      (when source
-        [:span.origin {:title source} (source-label source)])]
+      [:div.tags
+       (when generator
+         [:span.via {:title generator} "via " (app-label generator)])
+       (when source
+         [:span.origin {:title source} (source-label source)])]]
      (when (seq content)
        (into [:div.content]
              (for [para (str/split-lines content)]

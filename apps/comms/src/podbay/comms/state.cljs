@@ -19,6 +19,7 @@
            :destination nil      ; the one chosen for the next post
            :destination-access nil ; who can read it
            :destinations-status nil ; :loading | :ready | :failed
+           :apps {}              ; client id url -> the app's own name
            :loading-feed? false
            :posting? false
            :error nil}))
@@ -35,10 +36,25 @@
 (defn- published-at [post]
   (if-let [d (:published post)] (.getTime d) 0))
 
+(declare load-app-names!)
+
 (defn- rebuild-feed! [by-author]
   (swap! db assoc
          :posts-by-author by-author
-         :posts (vec (sort-by published-at > (mapcat val by-author)))))
+         :posts (vec (sort-by published-at > (mapcat val by-author))))
+  (load-app-names!))
+
+(defn- load-app-names!
+  "Resolve each distinct generator to the name its client identifier
+   document gives. One fetch per app, ever — the answer doesn't change."
+  []
+  (doseq [generator (->> (:posts @db) (keep :generator) distinct)
+          :when (not (contains? (:apps @db) generator))]
+    ;; claim it before the fetch so a second post by the same app
+    ;; doesn't start a duplicate request
+    (swap! db assoc-in [:apps generator] nil)
+    (p/then (pod/app-name+ generator)
+            #(swap! db assoc-in [:apps generator] (or % :unnamed)))))
 
 (defn- merge-author-posts!
   "Replace one author's posts and rebuild the merged feed. Each pod
