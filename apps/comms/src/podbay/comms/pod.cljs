@@ -405,14 +405,6 @@
              vals
              vec)))))
 
-;; ---------------------------------------------------------------------------
-;; Media
-;;
-;; Pod resources are private by default, and the browser won't attach the
-;; session's tokens to a plain <img src="https://pod/…"> — that request goes
-;; out unauthenticated and comes back 401. So media has to be fetched here,
-;; with the session's fetch, and handed to the element as a blob: URL.
-
 (defn app-name+
   "What an app calls itself, read from the client identifier document a
    post names as its generator.
@@ -420,15 +412,30 @@
    Those documents have to be public — an identity provider dereferences
    one before it will log anyone in — so this resolves for *any* app that
    uses a published identity, not just ours. Nil when it can't be read or
-   doesn't name itself; the caller falls back to the host."
+   doesn't name itself; the caller falls back to a name from the URL.
+
+   Deliberately a plain fetch rather than auth/auth-fetch. Sending the
+   session's Authorization and DPoP headers would make this a request the
+   browser has to preflight, and the host serving the document need not
+   answer OPTIONS at all — GitHub Pages, where ours live, returns 405. A
+   credential-free GET is a simple request, needs no preflight, and is
+   all these documents ever expect."
   [client-id-url]
-  (-> (p/let [resp (auth/auth-fetch client-id-url)]
+  (-> (p/let [resp (js/fetch client-id-url #js {:credentials "omit"})]
         (when (.-ok resp)
           (p/let [doc (.json resp)]
             (aget doc "client_name"))))
       (p/catch (fn [e]
                  (js/console.warn "Couldn't read app identity" client-id-url e)
                  nil))))
+
+;; ---------------------------------------------------------------------------
+;; Media
+;;
+;; Pod resources are private by default, and the browser won't attach the
+;; session's tokens to a plain <img src="https://pod/…"> — that request goes
+;; out unauthenticated and comes back 401. So media has to be fetched here,
+;; with the session's fetch, and handed to the element as a blob: URL.
 
 (defn media-url+
   "Fetch a media resource with the session's credentials and wrap the

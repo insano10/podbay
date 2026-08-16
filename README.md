@@ -577,6 +577,38 @@ than the pod — so the linked profile is the *only* document its owner
 can write. Without following `rdfs:seeAlso`, an ESS pod simply cannot
 publish anything discoverable.
 
+### Which app wrote a post
+
+Posts carry `as:generator` pointing at the client identifier document of
+the app that wrote them, and each post shows a **via** chip naming that
+app. The point is aggregation: a feed assembled from several pods is
+also a feed assembled by several apps, and the chip is what makes that
+visible. Anything with a published identity gets named, not just ours.
+
+The name comes from the `client_name` in the generator's own document —
+apps name themselves, and there's nothing to maintain here as new ones
+appear. Each distinct generator is fetched once per session
+(`state/load-app-names!` claims the entry before the request, so a feed
+of fifty posts from one app still makes one call).
+
+That fetch is a **plain `js/fetch` with `credentials: "omit"`**, not
+`auth/auth-fetch`, and the distinction matters. These documents are
+public by definition — an identity provider dereferences one, unattended
+and unauthenticated, before it will log anyone in. Sending the session's
+`Authorization` and `DPoP` headers would gain nothing and cost the
+request its *simple* status, obliging the browser to preflight it; the
+host serving the document is under no obligation to answer `OPTIONS`,
+and GitHub Pages, where ours live, returns 405. Credential-free, the GET
+needs no preflight and the `access-control-allow-origin: *` on the
+response is enough.
+
+When the document can't be read, the chip falls back to a name built
+from the URL's **path**, not its host: one origin can serve any number
+of apps, so `insano10.github.io` identifies nothing while
+`podbay/comms` identifies the app. The trailing segment is the
+document's own filename and is dropped. The full URL is always in the
+chip's tooltip.
+
 ### Round trips
 
 Pods can be slow: requests to solidcommunity.net have been observed

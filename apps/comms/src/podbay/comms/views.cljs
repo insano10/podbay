@@ -76,15 +76,35 @@
          (str/join "/"))
     (catch :default _ url)))
 
+(defn- app-name-from-url
+  "A name for an app from its client identifier URL alone, for when the
+   document itself can't be read.
+
+   The path is the informative part: one host can serve any number of
+   apps, so `insano10.github.io` says nothing, while `podbay/comms` says
+   which app wrote the post. The last segment is the document's own
+   filename (clientid.jsonld) and is dropped. Falls back to the host for
+   an identity published at a bare domain, which has no path to use."
+  [generator]
+  (try
+    (let [url (js/URL. generator)
+          segments (->> (str/split (.-pathname url) #"/")
+                        (remove str/blank?)
+                        butlast)]
+      (if (seq segments)
+        (str/join "/" segments)
+        (.-host url)))
+    (catch :default _ generator)))
+
 (defn- app-label
   "What to call the app that wrote a post. Its client identifier
    document names itself; until that resolves — or if it never does —
-   the host is a reasonable stand-in."
+   the URL is a reasonable stand-in."
   [generator]
   (let [known (get (:apps @state/db) generator)]
     (if (string? known)
       known
-      (try (.-host (js/URL. generator)) (catch :default _ generator)))))
+      (app-name-from-url generator))))
 
 (defn- audience-line
   "Who can read the container a post is headed for. Choosing where to
