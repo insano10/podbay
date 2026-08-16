@@ -95,7 +95,7 @@
                                  (state/show-menu! entry (.-clientX e) (.-clientY e)))}
      [:td.cell-icon (icon entry)]
      [:td.cell-name [:span.name name] (when container? [:span.slash "/"])]
-     [:td.cell-type (or media-type (when container? "folder") "")]
+     [:td.cell-type (or media-type (when container? "container") "")]
      [:td.cell-size (or (format-size size) "")]
      [:td.cell-date (or (format-date modified) "")]]))
 
@@ -116,7 +116,7 @@
   ;; to clear it — otherwise picking the same file twice does nothing
   (r/with-let [input-key (r/atom 0)]
     (let [uploading (:uploading @state/db)]
-      [:label.upload {:title "Upload files into this folder"}
+      [:label.upload {:title "Upload files into this container"}
        [:input {:key @input-key
                 :type "file"
                 :multiple true
@@ -132,8 +132,8 @@
      [:div.listing-tools
       [:button.subtle {:on-click #(state/ask-new! :file)
                        :title "Create an empty file here"} "+ File"]
-      [:button.subtle {:on-click #(state/ask-new! :folder)
-                       :title "Create a folder here"} "+ Folder"]
+      [:button.subtle {:on-click #(state/ask-new! :container)
+                       :title "Create a container here"} "+ Container"]
       [upload-control]
       [:span.tool-sep]
       [:label.reveal
@@ -148,7 +148,7 @@
        [:p.hint "Loading…"]
 
        (empty? entries)
-       [:p.hint "This folder is empty."]
+       [:p.hint "This container is empty."]
 
        :else
        [:table.files
@@ -226,8 +226,8 @@ Note: Losing this permission means losing the ability to grant it back."]])
   (when-let [{:keys [child reached?]} (:propagation @state/db)]
     [:p {:class (if reached? "hint" "warn")}
      (if reached?
-       (str "Checked “" child "” inside this folder: the grant reached it.")
-       (str "Checked “" child "” inside this folder: the grant did NOT reach
+       (str "Checked “" child "” inside this container: the grant reached it.")
+       (str "Checked “" child "” inside this container: the grant did NOT reach
              it. This server doesn't extend a container's access to its
              contents — grant on the items themselves."))]))
 
@@ -283,7 +283,7 @@ Note: Losing this permission means losing the ability to grant it back."]])
         [add-person]
         [propagation-note]
         (when (str/ends-with? (or url "") "/")
-          [:p.hint "Granting here covers the folder. Whether it also covers
+          [:p.hint "Granting here covers the container. Whether it also covers
                     what's inside depends on the server — the check above
                     says which."])]
 
@@ -411,7 +411,7 @@ Note: Losing this permission means losing the ability to grant it back."]])
                                              (state/hide-menu!))}]
      [:ul.menu {:style {:left (str x "px") :top (str y "px")}}
       [:li [:button {:on-click #(state/open-entry! entry)}
-            (if (:container? entry) "Open folder" "Open")]]
+            (if (:container? entry) "Open container" "Open")]]
       (when (:container? entry)
         [:li [:button {:on-click (fn []
                                    (state/hide-menu!)
@@ -431,23 +431,23 @@ Note: Losing this permission means losing the ability to grant it back."]])
 
 (defn- new-dialog []
   (when-let [{:keys [kind name]} (:creating @state/db)]
-    (let [folder? (= kind :folder)]
+    (let [container? (= kind :container)]
       [:div.modal-backdrop {:on-click state/cancel-new!}
        [:div.modal {:on-click (fn [^js e] (.stopPropagation e))}
-        [:h2 "New " (if folder? "folder" "file")]
+        [:h2 "New " (if container? "container" "file")]
         [:label {:for "new-name"} "Name"]
         [:input#new-name
          {:type "text"
           :value name
           :auto-focus true
           :spell-check false
-          :placeholder (if folder? "notes" "notes.ttl")
+          :placeholder (if container? "notes" "notes.ttl")
           :on-change #(state/update-new-name! (.. % -target -value))
           :on-key-down #(when (= "Enter" (.-key %)) (state/confirm-new!))}]
         [:p.hint
-         (if folder?
-           "Created in the folder you're viewing."
-           [:<> "Created empty in the folder you're viewing, then opened
+         (if container?
+           "Created in the container you're viewing."
+           [:<> "Created empty in the container you're viewing, then opened
                  for editing. The content type is guessed from the
                  extension — "
             [:code (pod/content-type-for (if (str/blank? name) "x" name))]
@@ -462,7 +462,7 @@ Note: Losing this permission means losing the ability to grant it back."]])
           {:keys [name container?]} entry]
       [:div.modal-backdrop {:on-click state/cancel-move!}
        [:div.modal {:on-click (fn [^js e] (.stopPropagation e))}
-        [:h2 "Rename or move " (if container? "folder" "file")]
+        [:h2 "Rename or move " (if container? "container" "file")]
         [:p [:strong name]]
         [:label {:for "move-target"} "New URL"]
         [:input#move-target
@@ -473,7 +473,7 @@ Note: Losing this permission means losing the ability to grant it back."]])
           :on-change #(state/update-move-target! (.. % -target -value))
           :on-key-down #(when (= "Enter" (.-key %)) (state/confirm-move!))}]
         [:p.hint "Edit the last segment to rename, or the path to move it
-                  elsewhere. Folders move everything inside them."]
+                  elsewhere. Containers move everything inside them."]
         [:ul.caveats
          [:li [:strong "Sharing does not follow."] " Access belongs to a
                URL, so the copy inherits whatever the destination gives
@@ -531,13 +531,25 @@ Note: Losing this permission means losing the ability to grant it back."]])
   (when-let [{:keys [name container? url]} (:confirm @state/db)]
     [:div.modal-backdrop {:on-click state/cancel-delete!}
      [:div.modal {:on-click (fn [^js e] (.stopPropagation e))}
-      [:h2 "Delete " (if container? "folder" "file") "?"]
+      [:h2 "Delete " (if container? "container" "file") "?"]
       [:p [:strong name]]
       [:p.url url]
       [:p.warning
-       "This permanently removes it from your pod and cannot be undone."
-       (when container?
-         " A folder must be empty before it can be deleted.")]
+       "This permanently removes it from your pod and cannot be undone."]
+      (when container?
+        [:<>
+         [:label.recursive
+          [:input {:type "checkbox"
+                   :checked (boolean (:delete-contents? @state/db))
+                   :on-change state/toggle-delete-contents!}]
+          "Delete everything inside it too"]
+         [:p.hint
+          (if (:delete-contents? @state/db)
+            "Every resource beneath this will be removed, one request at a
+             time, deepest first. There is no undo and no partial
+             rollback — whatever gets deleted stays deleted."
+            "A container must be empty before a server will delete it, so
+             this will fail unless it already is.")]])
       [:div.modal-actions
        [:button {:on-click state/cancel-delete!} "Cancel"]
        [:button.danger {:on-click state/confirm-delete!} "Delete"]]]]))
@@ -549,7 +561,7 @@ Note: Losing this permission means losing the ability to grant it back."]])
   (r/with-let [draft (r/atom "")]
     [:div.address
      [:input {:type "url"
-              :placeholder "Go to any pod URL — https://…/ for a folder"
+              :placeholder "Go to any pod URL — https://…/ for a container"
               :value @draft
               :spell-check false
               :on-change #(reset! draft (.. % -target -value))
@@ -566,7 +578,7 @@ Note: Losing this permission means losing the ability to grant it back."]])
      [address-bar]
      [:div.session
       [:button.subtle {:on-click state/show-current-details!
-                       :title "Details and sharing for this folder"}
+                       :title "Details and sharing for this container"}
        "ⓘ"]
       [:button.subtle {:on-click state/refresh!
                        :disabled loading?

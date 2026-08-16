@@ -504,3 +504,7 @@ label.upload input[type="file"] { display: none; }
 
 /* the mode chips are a readout, not controls */
 .mode { cursor: help; user-select: none; }
+.modal label.recursive {
+  display: flex; align-items: center; gap: 0.4rem;
+  margin-top: 0.75rem; font-weight: 500; color: var(--danger);
+}

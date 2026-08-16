@@ -26,7 +26,8 @@
            :opening nil         ; its url while the fetch is in flight
            :menu nil            ; {:x :y :entry} for the context menu
            :confirm nil         ; entry awaiting delete confirmation
-           :creating nil        ; {:kind :file|:folder :name ""}
+           :delete-contents? false ; ...and everything inside it
+           :creating nil        ; {:kind :file|:container :name ""}
            :uploading nil       ; how many files are in flight
            :revoking nil        ; a WebID awaiting revoke confirmation
            :moving nil          ; {:entry :target} while renaming/moving
@@ -163,7 +164,7 @@
                 ;; must not replace the one on screen
                 (when (= url (:path @db))
                   (swap! db assoc :entries entries :loading? false)
-                  ;; a new folder needs its own attachments looked up
+                  ;; a new container needs its own attachments looked up
                   (when (:show-attached? @db) (load-attached!)))))
       (p/catch (fn [e]
                  (when (= url (:path @db))
@@ -173,9 +174,9 @@
                          ;; down, so being refused a container says
                          ;; nothing about what's inside it
                          (when (#{401 403} (some-> ^js e .-statusCode))
-                           " — access is granted per resource, so a folder
+                           " — access is granted per resource, so a container
                              shared with you opens directly by its URL even
-                             when the folder above it doesn't."))))))))
+                             when the container above it doesn't."))))))))
 
 (defn load-attached!
   "One HEAD per entry, because a container lists its children but not
@@ -204,7 +205,7 @@
 (defn show-details!
   "Open a resource in the viewer *without* navigating into it. The only
    way to see a container's own metadata and sharing, since clicking a
-   folder means 'go inside' — and a container's representation is its
+   container means 'go inside' — and a container's representation is its
    listing, which reads perfectly well as Turtle."
   [entry]
   (open-file! entry))
@@ -329,7 +330,7 @@
   (swap! db assoc :menu nil))
 
 (defn upload-files!
-  "Upload picked files into the folder being viewed."
+  "Upload picked files into the container being viewed."
   [file-list]
   (let [path (:path @db)
         files (vec (array-seq file-list))
@@ -370,7 +371,7 @@
   (when-let [{:keys [kind name]} (:creating @db)]
     (let [path (:path @db)
           clean (str/trim name)
-          folder? (= kind :folder)]
+          container? (= kind :container)]
       (cond
         (str/blank? clean)
         (cancel-new!)
@@ -381,9 +382,9 @@
             (set-error! (str "“" clean "” already exists here.")))
 
         :else
-        (let [url (str path (js/encodeURIComponent clean) (when folder? "/"))]
+        (let [url (str path (js/encodeURIComponent clean) (when container? "/"))]
           (swap! db assoc :creating nil :loading? true)
-          (-> (if folder?
+          (-> (if container?
                 (pod/create-container+ url)
                 (pod/create-file+ url (pod/content-type-for clean)))
               (p/then (fn [_]
@@ -391,7 +392,7 @@
                         (reload-listing!)
                         ;; a new empty file is only useful open, so put
                         ;; the cursor where it's about to be needed
-                        (when-not folder?
+                        (when-not container?
                           (p/then (open-file! {:url url :name clean :container? false})
                                   (fn [_] (start-edit!))))))
               (p/catch (fn [e]
@@ -419,8 +420,19 @@
 (defn confirm-move! []
   (when-let [{:keys [entry target]} (:moving @db)]
     (let [target (normalise-target target (:container? entry))]
-      (if (or (str/blank? target) (= target (:url entry)))
+      (cond
+        (or (str/blank? target) (= target (:url entry)))
         (cancel-move!)
+
+        ;; Moving a container into itself makes every child a new child
+        ;; of the source, which the recursive move then finds and moves
+        ;; again — nesting until something gives out. Refuse it.
+        (and (:container? entry) (str/starts-with? target (:url entry)))
+        (do (swap! db assoc :moving nil)
+            (set-error!
+             (str "Can't move " (:name entry) " inside itself — that would
+                   nest it endlessly.")))
+        :else
         (do
           (swap! db assoc :move-busy? true :error nil)
           (-> (pod/move+ entry target)
@@ -441,28 +453,36 @@
                                " anything already moved now exists in both places."))))))))))
 
 (defn ask-delete! [entry]
-  (swap! db assoc :confirm entry :menu nil))
+  ;; always starts off: escalating to a recursive delete must be a
+  ;; deliberate act each time, not a setting that persists
+  (swap! db assoc :confirm entry :menu nil :delete-contents? false))
+
+(defn toggle-delete-contents! []
+  (swap! db update :delete-contents? not))
 
 (defn cancel-delete! []
   (swap! db assoc :confirm nil))
 
 (defn confirm-delete! []
   (when-let [entry (:confirm @db)]
-    (swap! db assoc :confirm nil :loading? true)
-    (-> (pod/delete+ entry)
-        (p/then (fn [_]
-                  (when (= (:url entry) (:url (:open @db)))
-                    (close-file!))
-                  ;; drop it from the listing straight away rather than
-                  ;; leaving it on screen for a slow round trip; the
-                  ;; refresh behind it is what confirms
-                  (swap! db update :entries
-                         (fn [es] (vec (remove #(= (:url %) (:url entry)) es))))
-                  (refresh!)))
-        (p/catch #(set-error! (describe (str "Couldn't delete " (:name entry)) %))))))
-
-;; ---------------------------------------------------------------------------
-;; Session
+    (let [recursive? (and (:container? entry) (:delete-contents? @db))]
+      (swap! db assoc :confirm nil :delete-contents? false :loading? true)
+      (-> (if recursive? (pod/delete-tree+ entry) (pod/delete+ entry))
+          (p/then (fn [_]
+                    (when (= (:url entry) (:url (:open @db)))
+                      (close-file!))
+                    ;; drop it from the listing straight away rather than
+                    ;; leaving it on screen for a slow round trip; the
+                    ;; refresh behind it is what confirms
+                    (swap! db update :entries
+                           (fn [es] (vec (remove #(= (:url %) (:url entry)) es))))
+                    (refresh!)))
+          (p/catch (fn [e]
+                     ;; a recursive delete that failed part way has
+                     ;; already removed things — reload rather than
+                     ;; leaving the listing describing a past state
+                     (refresh!)
+                     (set-error! (describe (str "Couldn't delete " (:name entry)) e))))))))
 
 (defn login! [issuer]
   (swap! db assoc :error nil)

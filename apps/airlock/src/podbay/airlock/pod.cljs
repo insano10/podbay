@@ -94,7 +94,7 @@
      :media-type (media-type types)}))
 
 (defn list-container+
-  "Entries of a container, folders first then files, each alphabetical."
+  "Entries of a container, containers first then files, each alphabetical."
   [container-url]
   (p/let [ds (sc/getSolidDataset container-url (fresh-opts))]
     (->> (array-seq (sc/getContainedResourceUrlAll ds))
@@ -336,6 +336,26 @@
     (sc/deleteContainer url (opts))
     (sc/deleteFile url (opts))))
 
+(declare delete-tree+)
+
+(defn- delete-contents+ [url]
+  (p/let [entries (list-container+ url)
+          _ (p/all (mapv delete-tree+ entries))]
+    (sc/deleteContainer url (opts))))
+
+(defn delete-tree+
+  "Delete a resource and, for a container, everything inside it —
+   depth-first, because a server won't remove a container that still has
+   children.
+
+   There is no bulk delete in Solid: this is one request per resource,
+   all the way down. On a deep tree that is a lot of requests, and a
+   failure part way leaves whatever it already removed removed."
+  [{:keys [url container?] :as entry}]
+  (if container?
+    (delete-contents+ url)
+    (delete+ entry)))
+
 ;; ---------------------------------------------------------------------------
 ;; Creating
 
@@ -407,7 +427,7 @@
 ;;
 ;; There is no MOVE in Solid: a move is a copy followed by a delete, in
 ;; that order deliberately — if the copy fails, the original is still
-;; there. The cost is that an interrupted move of a folder leaves some
+;; there. The cost is that an interrupted move of a container leaves some
 ;; items in both places rather than losing any.
 ;;
 ;; Two things do NOT come along, and both matter enough that the UI says
@@ -449,7 +469,7 @@
     (sc/deleteContainer from (opts))))
 
 (defn move+
-  "Move or rename a resource. Folders move their whole contents,
+  "Move or rename a resource. Containers move their whole contents,
    depth-first, each child copied before its original is removed."
   [{:keys [url container?]} target]
   (if container?
