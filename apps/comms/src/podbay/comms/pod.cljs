@@ -168,6 +168,14 @@
         (swap! type-index-cache assoc webid ds+)
         ds+)))
 
+(defn- as-container
+  "A container URL must end in a slash. A server treats the two forms as
+   different resources, and joining a filename onto the slashless form
+   quietly produces a *sibling* with a run-together name rather than a
+   child — so normalise whatever a type index happens to say."
+  [url]
+  (cond-> url (not (str/ends-with? url "/")) (str "/")))
+
 (defn- registrations+
   "Every place a WebID's public type index says instances of `class-iri`
    live: containers and individual documents.
@@ -188,7 +196,8 @@
             urls-of (fn [predicate]
                       (into [] (distinct)
                             (mapcat #(array-seq (sc/getUrlAll % predicate)) matching)))]
-        {:containers (urls-of v/solid-instanceContainer)
+        {:containers (mapv as-container (urls-of v/solid-instanceContainer))
+         ;; an instance names a document, not a container — no slash
          :instances (urls-of v/solid-instance)}))))
 
 (defn forget-caches!
@@ -507,7 +516,7 @@
 
    `container` names where it goes; nil falls back to write-container+."
   [webid content files container]
-  (p/let [posts-url (or container (write-container+ webid))
+  (p/let [posts-url (as-container (or container (write-container+ webid)))
           media-url (media-container posts-url)
           _ (ensure-container+ posts-url)
           _ (when (seq files) (ensure-container+ media-url))

@@ -283,10 +283,27 @@ What it does today:
   belongs to a URL, so the copy inherits the destination's), and
   **nothing referencing the old URL is rewritten**, including type index
   registrations and posts that link media absolutely.
+
+  Moving a container into **itself or any descendant is refused**. The
+  recursive move would make each child a new child of the source, which
+  the recursion then finds and moves again, nesting until something
+  gives out — and the result can't be deleted by ordinary means, since a
+  server won't remove a container that still has children.
 - **Right-click** any row for open, copy URL, open raw, and delete.
   Delete asks for confirmation naming the resource, and containers use a
-  different call from files — most servers refuse to delete a container
-  that still has children.
+  different call from files.
+- **Deleting a container's contents too** is a checkbox in that dialog,
+  off by default and reset every time — escalating has to be a deliberate
+  act, never a setting that persists. It works depth-first, because a
+  server won't remove a container that still has children.
+
+  There is no bulk delete in Solid: this is **one request per resource**,
+  all the way down, which on a deep tree over a slow pod takes a while.
+  A failure part way leaves whatever it already removed removed, so the
+  listing reloads on failure rather than describing a pod that no longer
+  exists. The dialog's hint changes with the checkbox — unticked it warns
+  the delete will fail unless the container is already empty; ticked it
+  warns there is no undo and no partial rollback.
 
 ### Two apps, one session
 
