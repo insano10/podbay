@@ -25,9 +25,19 @@
 (defn- format-date [^js/Date d]
   (when d (.toLocaleString d)))
 
-(defn- short-webid [webid]
+(defn- short-webid
+  "A WebID short enough to sit in a list, without losing who it is.
+
+   Host and path, dropping the scheme and the fragment. The host alone
+   isn't enough: an ESS WebID is id.inrupt.com/<username>, so every
+   Inrupt user would render identically and a sharing list would be
+   unreadable. The path is the identifying part there, the host is on
+   solidcommunity.net, and this keeps both. Full URL is in the tooltip."
+  [webid]
   (try
-    (.-host (js/URL. webid))
+    (let [u (js/URL. webid)
+          path (.-pathname u)]
+      (str (.-host u) (when-not (= "/" path) path)))
     (catch :default _ webid)))
 
 (defn- icon [{:keys [container? media-type]}]
@@ -338,6 +348,15 @@ Note: Losing this permission means losing the ability to grant it back."]])
 
        :ready
        [:<>
+        ;; Everything in this block is what's set on *this* resource,
+        ;; never what it inherits — the two are reported separately
+        ;; because only the first can be changed from here, and a
+        ;; Revoke button beside an inherited rule would write the file
+        ;; its own ACL and detach it from its container rather than
+        ;; undoing anything.
+        [:h3.scope (if (str/ends-with? (or url "") "/")
+                     "Set on this container"
+                     "Set on this file")]
         [:dl
          [:dt "Everyone"]
          [:dd (if public
@@ -368,11 +387,6 @@ Note: Losing this permission means losing the ability to grant it back."]])
                  :title (str "Remove access for " agent-webid)
                  :on-click #(state/ask-revoke! agent-webid)}
                 "Revoke"]]])]
-          ;; Carefully worded. On ACP this list is only what is set on
-          ;; *this* resource: access inherited from a container lives in
-          ;; that container's rules and is invisible here, so claiming
-          ;; nobody has access would be false for every file in a shared
-          ;; container.
           [:p.hint "Nobody has been given access here."])
 
         [member-access-note]

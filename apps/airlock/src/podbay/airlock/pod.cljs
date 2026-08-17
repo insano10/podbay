@@ -199,6 +199,11 @@
 
 (def ^:private universal-access sc/universalAccess)
 
+;; The ACP-specific API, needed wherever the universal one can't express
+;; something — which turns out to be anything about a container's
+;; contents. See "Access that reaches a container's contents" below.
+(def ^:private acp sc/acp_ess_2)
+
 (defn- access->map [^js a]
   (when a
     {:read (.-read a)
@@ -213,23 +218,57 @@
           (for [webid (array-seq (js/Object.keys all))]
             [webid (access->map (aget all webid))]))))
 
-(defn access+
-  "Who can do what with a resource.
+(defn- wac-access->map
+  "WAC has one acl:Control where the universal shape has two flags."
+  [^js a]
+  (when a
+    {:read (.-read a) :append (.-append a) :write (.-write a)
+     :control-read (.-control a) :control-write (.-control a)}))
 
-   Resolves to {:public {…} :agents {webid {…}}}. Either half is nil
-   when the server won't say — a server may simply not report public
-   access, which is different from reporting that there is none. Rejects
-   only if the access control resource can't be read at all, which is
-   what happens on resources you don't control."
+(defn- wac-agents->map [^js all]
+  (when all
+    (into {}
+          (for [webid (array-seq (js/Object.keys all))]
+            [webid (wac-access->map (aget all webid))]))))
+
+(defn access+
+  "Rules set **on this resource**, as {:public {…} :agents {webid {…}}}.
+
+   Deliberately not effective access. On ACP that's all the API can
+   report anyway, but on WAC `getAgentAccessAll` folds in whatever the
+   resource inherits, with no way to tell the two apart afterwards — so
+   a file in a shared container listed the people who could read it as
+   though each had been granted access to that file, next to a Revoke
+   button. Revoking there doesn't undo the container's rule; it writes
+   the file its own ACL, which quietly detaches it from the container
+   for good. The WAC path therefore reads the resource's own ACL
+   directly, and what's inherited is reported separately by
+   access-context+.
+
+   Either half is nil when the server won't say, which is different
+   from reporting that there is none. Rejects only if the access
+   control resource can't be read at all, which is what happens on
+   resources you don't control."
   [url]
   ;; every read here happens either just before or just after a write to
   ;; the very thing being read, so it must revalidate — a cached access
   ;; control resource would report the rules as they were, which reads as
   ;; "the change didn't work"
-  (p/let [public (.getPublicAccess ^js universal-access url (fresh-opts))
-          agents (.getAgentAccessAll ^js universal-access url (fresh-opts))]
-    {:public (access->map public)
-     :agents (agents->map agents)}))
+  (p/let [acp? (.isAcpControlled acp url (opts))]
+    (if acp?
+      (p/let [public (.getPublicAccess ^js universal-access url (fresh-opts))
+              agents (.getAgentAccessAll ^js universal-access url (fresh-opts))]
+        {:public (access->map public)
+         :agents (agents->map agents)})
+      (p/let [ds (sc/getSolidDatasetWithAcl url (fresh-opts))]
+        (if-let [acl (sc/getResourceAcl ds)]
+          {:public (wac-access->map (sc/getPublicResourceAccess acl))
+           :agents (wac-agents->map (sc/getAgentResourceAccessAll acl))}
+          ;; no ACL of its own is an answer, not a silence: nothing is
+          ;; set here, and everything this resource allows is inherited
+          {:public {:read false :append false :write false
+                    :control-read false :control-write false}
+           :agents {}})))))
 
 (defn- ->js-access
   "Only the modes actually named are sent, so a change can adjust one
@@ -296,8 +335,6 @@
 ;; Either way it applies to what is *in* the container when a request is
 ;; made, not to what was there when the rule was written — so this covers
 ;; existing files and future ones alike, with no walk over the contents.
-
-(def ^:private acp sc/acp_ess_2)
 
 ;; ACP's own vocabulary. Needed because solid-client offers no way to
 ;; read a *member* policy: getResourcePolicy insists the policy appear
@@ -581,6 +618,46 @@
                  (js/console.warn "Couldn't read member access for" url e)
                  {:error (or (some-> ^js e .-message) (str e))}))))
 
+(defn- acl-subjects
+  "An ACL's rules as {subject {…}}, with :public alongside the WebIDs,
+   read through whichever pair of accessors the caller passes — the
+   resource ones for what an ACL sets on its own resource, the default
+   ones for what it hands down."
+  [acl agents-of public-of]
+  (let [agents (or (wac-agents->map (agents-of acl)) {})
+        public (wac-access->map (public-of acl))]
+    (cond-> agents
+      (some true? (vals (select-keys public [:read :append :write])))
+      (assoc :public public))))
+
+(defn- wac-access-context+
+  "WAC: what a container hands down, and what this resource inherits.
+
+   Only one request, and no walk. acl:default is resolved by the server
+   and by solid-client into a single *fallback* ACL — the nearest
+   ancestor that has one — so unlike ACP there is no chain to follow
+   and no per-level control access to be refused."
+  [url]
+  (-> (p/let [ds (sc/getSolidDatasetWithAcl url (fresh-opts))]
+        (let [own-acl (sc/getResourceAcl ds)
+              fallback (sc/getFallbackAcl ds)]
+          {:own (when (and own-acl (str/ends-with? url "/"))
+                  {:agents (acl-subjects own-acl
+                                         sc/getAgentDefaultAccessAll
+                                         sc/getPublicDefaultAccess)})
+           :inherited (when fallback
+                        (let [agents (acl-subjects fallback
+                                                   sc/getAgentDefaultAccessAll
+                                                   sc/getPublicDefaultAccess)]
+                          (when (seq agents)
+                            ;; the ACL knows which resource it governs,
+                            ;; which is the container to name here
+                            [{:container (.-internal_accessTo ^js fallback)
+                              :agents agents}])))}))
+      (p/catch (fn [e]
+                 (js/console.warn "Couldn't read inherited access for" url e)
+                 nil))))
+
 (defn access-context+
   "Everything the sharing pane needs that the access API can't report:
 
@@ -595,12 +672,11 @@
    independent and doing them in turn would make opening a deep file
    noticeably slow.
 
-   Resolves to nil on a pod that isn't ACP, where inheritance is
-   acl:default and the access API already accounts for it. The one ACP
-   check covers every level: a pod is one system or the other."
+   The one ACP check covers every level: a pod is one system or the
+   other."
   [url root]
   (p/let [acp? (.isAcpControlled acp url (opts))]
-    (when acp?
+    (if acp?
       (p/let [containers (ancestor-containers url root)
               own (when (str/ends-with? url "/") (member-access+ url))
               results (p/all (map member-access+ containers))]
@@ -609,7 +685,8 @@
                                 (assoc result :container container))
                               containers results)
                          (filter #(or (seq (:agents %)) (:error %)))
-                         vec)}))))
+                         vec)})
+      (wac-access-context+ url))))
 
 (defn set-inherited-access+
   "Set what `subject` — a WebID, or :public for everyone — may do with

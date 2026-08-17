@@ -317,9 +317,28 @@ What it does today:
   resource untouched — so the choice is between leaving an `allow Read`
   behind and leaving an inert husk. The husk is the one that can't be
   misread.
-- **The sharing pane shows a container's rules for its contents
-  separately**, because on ACP they are a different part of the access
-  control resource and the access API doesn't report them at all.
+- **The pane reports rules set on a resource, never its effective
+  access.** That distinction matters most on WAC, where
+  `getAgentAccessAll` folds in whatever a resource inherits and gives
+  no way to tell the two apart afterwards. A file in a shared container
+  therefore listed everyone who could read it as though each had been
+  granted access *to that file*, next to a Revoke button — and revoking
+  there doesn't undo the container's rule. It writes the file its own
+  ACL, which as solid-client warns means "changes to the ACL of a
+  parent Container can no longer affect access people have to this
+  Resource". A button labelled Revoke would have silently detached the
+  file from its container for good.
+
+  So the WAC path reads the resource's own ACL directly
+  (`getAgentResourceAccessAll`), which is what ACP reports anyway, and
+  the two servers now say the same kind of thing. Inherited rules come
+  from the fallback ACL and are shown in their own section. WAC needs
+  no walk for this, unlike ACP: `acl:default` resolves to a single
+  nearest-ancestor ACL, which solid-client returns alongside the
+  resource, and it carries the URL of the container it governs.
+- **A container's rules for its contents are shown separately**,
+  because on ACP they are a different part of the access control
+  resource and the access API doesn't report them at all.
   `getAgentAccessAll` enumerates agents from Things in *that resource's
   own* ACR and evaluates only its own policies — so a file inheriting
   read from its container reads back as shared with nobody. Left alone,
