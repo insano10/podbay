@@ -223,12 +223,118 @@ What it does today:
   combination can't be constructed — solid-client *throws* on a WAC pod
   if the two differ, which would otherwise be a change that works
   against ESS and fails against CSS.
-- **A grant on a container is verified, not assumed.** WAC inherits: a
-  container's access covers what's inside unless a child overrides. ACP
-  composes policies, and a container's own access need not be its
-  members'. `universalAccess` unifies the API, not the semantics — so
-  after granting on a container the app reads back a resource *inside*
-  it and says whether the grant actually reached it.
+- **A grant on a container also covers its contents**, which takes two
+  writes and two different APIs. `universalAccess` is explicit that it
+  won't do this: *"if the Resource is a Container, the configured Access
+  will not apply to contained Resources."* On its own that makes sharing
+  a container of posts useless — the reader is admitted to the container
+  and refused every file in it. So `set-inherited-access+` follows up
+  with the server's own inheritance mechanism, picked by asking the pod
+  (`isAcpControlled`) rather than from configuration:
+
+  | | Mechanism | How it's written |
+  |---|---|---|
+  | CSS (WAC) | `acl:default` in the container's `.acl` | `setAgentDefaultAccess` + `saveAclFor` |
+  | ESS (ACP) | a policy linked as `acp:memberAccessControl` | `addMemberPolicyUrl` + `saveAcrFor` |
+
+  Both are evaluated against what's in the container *when a request is
+  made*, so this covers files already there as well as ones added later
+  — no walk over the contents, and one write however many posts there
+  are. Per-file rules are left alone.
+
+  Two details worth keeping. On WAC, a container with no `.acl` of its
+  own is governed by an ancestor's, so a new one is seeded with
+  `createAclFromFallbackAcl` — creating a blank ACL would silently drop
+  the inherited rules, quite possibly including your own control access.
+  On ACP the app writes one matcher and one policy per mode at
+  predictable names inside the ACR, so a later change edits what an
+  earlier one wrote instead of piling up policies; revoking empties the
+  matcher rather than unlinking the policy, which would take everyone
+  else's access with it.
+
+  **The ACP trap, which cost an evening.** solid-client has two sets of
+  near-identically named functions, and only one writes to the access
+  control resource:
+
+  ```js
+  setPolicy(policyResource, policy)     → setThing(policyResource, policy)
+  setResourcePolicy(resourceWithAcr, p) → …writes into internal_acp.acr
+  ```
+
+  Pass a resource-with-ACR to `setPolicy` and the policy lands in the
+  *container's own dataset* instead. `saveAcrFor` then writes an ACR
+  containing a member policy URL with **no policy behind it** — a rule
+  that grants nothing, saved without error, and visible in the ACR only
+  as a bare `{"id": "…#podbay-member-read-policy", "type": "Policy"}`
+  with no `allow` and no `anyOf`. Use the `Resource*` variants
+  throughout; they also name Things relative to the ACR, so no URL has
+  to be assembled by hand.
+
+  One asymmetry to know: `getResourcePolicy` returns `null` for a
+  *member* policy however plainly it is in the ACR, because it requires
+  the policy to appear in `getPolicyUrlAll`, which lists only the
+  resource's own. So the policy is rebuilt from scratch on each change
+  rather than read and amended — its whole content is one mode and one
+  matcher, `setResourcePolicy` replaces any previous instance, and
+  stating the desired state outright is idempotent anyway.
+
+  **Control is never inherited.** Being able to rewrite the access rules
+  of every file in a container is not something to hand over as a side
+  effect of sharing it.
+- **The sharing pane shows a container's rules for its contents
+  separately**, because on ACP they are a different part of the access
+  control resource and the access API doesn't report them at all.
+  `getAgentAccessAll` enumerates agents from Things in *that resource's
+  own* ACR and evaluates only its own policies — so a file inheriting
+  read from its container reads back as shared with nobody. Left alone,
+  the pane states that as fact for every file in a shared container.
+
+  There's no library call for this: `getResourcePolicy` refuses to
+  return a member policy, and the ACR isn't exposed as a dataset. But it
+  is an ordinary RDF document at a known URL, so `member-access+`
+  fetches and walks it — `acp:memberAccessControl` → `acp:apply` →
+  `acp:allow` and `acp:anyOf` → `acp:agent`.
+
+  A file gets the same treatment in reverse, under **Inherited from**:
+  `access-context+` walks the containers above it — nearest first, up
+  to the storage root and never past it — and reads each one's member
+  rules. Levels are fetched concurrently, since they're independent and
+  a deep file would otherwise open slowly, and only levels that grant
+  something (or couldn't be read) are listed. Saying "nothing is set
+  here" and stopping was accurate and still misleading: anyone reads it
+  as "nobody can see this", which for a post in a shared container is
+  the opposite of the truth.
+
+  A container that grants nothing isn't listed. Worth noting because it
+  took a fix: every ACR links its parent's access controls by URL, so
+  "this ACR mentions something" is true at every level and made the
+  emptiness test useless. Those cross-document links are now ignored
+  outright — the walk visits those ancestors anyway, and resolving the
+  links would read the same rules twice.
+
+  Two limits remain, stated in the interface rather than papered over.
+  A container whose control access we're refused is listed with the
+  reason rather than silently skipped. And a policy carrying
+  `acp:allOf` (every matcher must match) can't be reduced to a list of
+  people, so it's skipped rather than guessed at.
+- **A grant on a container is verified on WAC, and deliberately not on
+  ACP.** After granting, the app reads back a resource *inside* the
+  container and reports whether the grant reached it. On WAC that's a
+  real check with a real answer: a file carrying its own `.acl` does not
+  inherit the container's, and this is what notices.
+
+  On ACP the same check cannot work, so it isn't run. solid-client
+  computes ACP access **client-side**, from `getPolicyUrlAll` and
+  `getAcrPolicyUrlAll` — the policies attached to that resource — and
+  never from `getMemberPolicyUrlAll` or any ancestor's access control
+  resource. Its own source is frank about this (`TODO: add support for
+  external resources`, and a matcher reducer labelled `TODO: Proper
+  solution`). An inherited member policy is exactly what it can't see,
+  so it reported a correctly-shared container as unshared — which was
+  confirmed a false negative when the posts duly appeared in Comms on
+  the other pod. A check that can't answer is worth less than the
+  request it costs, so on ACP the app says what it wrote and leaves it
+  there.
 - **Editing** any text resource in place — Turtle, JSON, plain text.
   It's a raw `PUT` of exactly what you typed rather than a parse and
   reserialise through solid-client, so hand-written comments, prefixes
@@ -525,6 +631,43 @@ Every pod request in both apps goes through it, so this is also the most
 likely reason the third-party pod browsers feel unreliable: they surface
 the blip rather than absorbing it.
 
+### Reading pods you have no account with
+
+Solid's whole premise is that you read other people's pods, on servers
+you've never authenticated to. But an access token only means anything
+to the provider that issued it, and servers disagree about what to do
+with one they can't validate. Some ignore it and serve whatever is
+public. **Inrupt's reject the request outright with a 401** — including
+for resources that are world-readable to a browser sending no
+credentials at all:
+
+| Request | Anonymous | Token from another issuer |
+|---|---|---|
+| `id.inrupt.com/<user>` (a WebID document) | 200 | 401 |
+| `<storage>/profile` (public extended profile) | 200 | 401 |
+| `<storage>/publicTypeIndex.ttl` | 200 | 401 |
+
+So a session on solidcommunity.net could read *nothing* on an ESS pod:
+not the WebID document, not a public profile, not a public type index.
+Following someone on the other provider failed at the first step and
+showed only their host, because every stage of
+[discovery](#finding-where-posts-live) was a 401.
+
+`auth-fetch` therefore falls back: when a **read** comes back 401 and we
+are logged in, it asks once more with no session attached. Once
+credentials have been refused, public access is the only access left, so
+there is nothing else to try.
+
+It's safe in the cases it doesn't help. A genuinely private resource
+answers 401 anonymously too, and the caller sees the same failure one
+round trip later. It can't disguise an expired session for the same
+reason. And it's reads only — a write the server refused our credentials
+for will not succeed without them.
+
+Worth knowing that this makes a 401 cost two round trips whenever it's
+real. That's the right trade here: the alternative is a whole class of
+pod being unreadable.
+
 ### Caching
 
 Pod responses carry no `Cache-Control`, but they do carry
@@ -544,6 +687,16 @@ full body. Not `no-store`, which would throw the cache away entirely.
 | container listings (both apps) | individual post documents |
 | `contacts.ttl` | WebID profiles |
 | any file opened in the browser | type indexes, media |
+| access control resources | |
+
+Access control belongs in the left column for a sharper reason than the
+rest. Every read of it happens immediately before or after a write to
+the very same resource — the sharing pane reloads after a grant, and
+both inheritance paths are read-modify-write. A cached copy there
+doesn't just show stale information, it gets **written back over
+whatever the server actually holds**. It also makes a change that
+worked look like a change that did nothing, which is a bad way to spend
+an afternoon.
 
 The right-hand column is either immutable once written or already
 memoised in-process for the session (`pod/profile+`, `pod/type-index+`),

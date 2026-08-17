@@ -16,6 +16,7 @@
            :loading? false
            :open nil            ; the resource being viewed, if any
            :access nil          ; who that resource is shared with
+           :member-access nil   ; what a container grants its contents (ACP)
            :editing nil         ; {:url :draft} while a file is being edited
            :saving? false
            :show-attached? false ; reveal each entry's .acl / .meta
@@ -57,8 +58,28 @@
 (defn close-file! []
   (when-let [object-url (:object-url (:open @db))]
     (pod/release-object-url! object-url))
-  (swap! db assoc :open nil :opening nil :access nil :propagation nil
-                  :editing nil))
+  (swap! db assoc :open nil :opening nil :access nil :member-access nil
+                  :propagation nil :editing nil))
+
+(defn container-label
+  "A container as a short path relative to the pod, e.g.
+   social/posts/default-private/. The storage root's own name is
+   uninformative on ESS, where it's a UUID, so that renders as the pod."
+  [url]
+  (let [{:keys [roots]} @db
+        root (first (filter #(str/starts-with? (or url "") %) roots))]
+    (if (and root (not= url root))
+      (subs url (count root))
+      "the pod itself")))
+
+(defn- storage-root-of
+  "Which of the pod's storage roots contains `url`. The walk up the
+   container chain stops there — above a storage root is someone else's
+   business, and on ESS isn't part of this pod at all."
+  [url]
+  (let [{:keys [roots]} @db]
+    (or (first (filter #(str/starts-with? (or url "") %) roots))
+        (first roots))))
 
 (defn- load-access!
   "Fetch who a resource is shared with, alongside its contents. Kept in
@@ -66,8 +87,15 @@
    separately, and because being refused is a normal outcome worth
    showing as such."
   [url]
-  (swap! db assoc :access {:url url :status :loading})
+  (swap! db assoc :access {:url url :status :loading} :member-access nil)
   (let [current? #(= url (:url (:access @db)))]
+    ;; Access inherited from a container lives only on that container
+    ;; and is invisible to the access API, so it's read separately.
+    ;; Best-effort: failing to read it must not take the pane with it.
+    (-> (pod/access-context+ url (storage-root-of url))
+        (p/then (fn [m] (when (and m (current?))
+                          (swap! db assoc :member-access m))))
+        (p/catch (fn [e] (js/console.warn "Couldn't read inherited access" e))))
     (-> (pod/access+ url)
         (p/then (fn [access]
                   (when (current?)
@@ -255,12 +283,26 @@
 ;; report what actually happened rather than assuming it worked.
 
 (defn- check-propagation!
-  "Did a grant on this container reach the things inside it?"
+  "Did a grant on this container reach the things inside it?
+
+   Only answerable on WAC. solid-client's ACP implementation of
+   getAgentAccess evaluates `getPolicyUrlAll` and `getAcrPolicyUrlAll`
+   — the policies attached directly to the resource — and never
+   `getMemberPolicyUrlAll`, nor any ancestor's access control resource,
+   which it is candid about (`TODO: add support for external
+   resources`). An inherited member policy is precisely what it cannot
+   see, so on ACP it isn't run at all — an answer that can't be trusted
+   either way is worth less than the request it costs.
+
+   On WAC it earns its place: a child carrying its own .acl genuinely
+   does not inherit the container's, and this is what notices."
   [container-url webid]
   (let [child (->> (:entries @db)
                    (remove :container?)
                    first)]
-    (when (and child (= container-url (:path @db)))
+    (when (and child
+               (= container-url (:path @db))
+               (not= :acp (:mechanism (:inherited @db))))
       (-> (pod/agent-access+ (:url child) webid)
           (p/then (fn [child-access]
                     (swap! db assoc :propagation
@@ -274,10 +316,35 @@
   (when (and webid (str/ends-with? url "/"))
     (check-propagation! url webid)))
 
-(defn grant-agent! [webid access]
+(defn- container-url? [url] (str/ends-with? url "/"))
+
+(defn grant-agent!
+  "Change one person's access to the thing currently open.
+
+   On a container this is two writes, not one: the container's own
+   access, and the access its contents inherit. Both are needed and
+   neither implies the other — without the first the container can't be
+   opened, and without the second every file in it is refused. They're
+   sequential because the second reads the access control resource the
+   first has just rewritten."
+  [webid access]
   (when-let [url (:url (:access @db))]
-    (swap! db assoc :access-busy? true :propagation nil)
+    (swap! db assoc :access-busy? true :propagation nil :inherited nil)
     (-> (pod/set-agent-access+ url webid access)
+        (p/then (fn [_]
+                  (when (container-url? url)
+                    ;; reported separately from the grant itself: it is a
+                    ;; distinct write against a distinct API, and when
+                    ;; sharing doesn't work this is the half that decides
+                    ;; whether the cause is "we didn't write it" or "the
+                    ;; server didn't honour it"
+                    (-> (pod/set-inherited-access+ url webid access)
+                        (p/then #(swap! db assoc :inherited (assoc % :ok? true)))
+                        (p/catch (fn [e]
+                                   (js/console.warn "Inherited access failed" e)
+                                   (swap! db assoc :inherited
+                                          {:ok? false :message (.-message e)})
+                                   nil))))))
         (p/then (fn [_] (after-access-change! url webid)))
         (p/catch (fn [e]
                    (swap! db assoc :access-busy? false)

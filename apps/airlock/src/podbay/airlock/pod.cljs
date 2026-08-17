@@ -222,8 +222,12 @@
    only if the access control resource can't be read at all, which is
    what happens on resources you don't control."
   [url]
-  (p/let [public (.getPublicAccess ^js universal-access url (opts))
-          agents (.getAgentAccessAll ^js universal-access url (opts))]
+  ;; every read here happens either just before or just after a write to
+  ;; the very thing being read, so it must revalidate — a cached access
+  ;; control resource would report the rules as they were, which reads as
+  ;; "the change didn't work"
+  (p/let [public (.getPublicAccess ^js universal-access url (fresh-opts))
+          agents (.getAgentAccessAll ^js universal-access url (fresh-opts))]
     {:public (access->map public)
      :agents (agents->map agents)}))
 
@@ -270,8 +274,282 @@
   "One agent's access to one resource. Used to check whether a grant on
    a container actually reached the things inside it."
   [url webid]
-  (p/let [result (.getAgentAccess ^js universal-access url webid (opts))]
+  (p/let [result (.getAgentAccess ^js universal-access url webid (fresh-opts))]
     (access->map result)))
+
+;; ---------------------------------------------------------------------------
+;; Access that reaches a container's contents
+;;
+;; universalAccess sets access for one resource and says so plainly: "if
+;; the Resource is a Container, the configured Access will not apply to
+;; contained Resources". That makes sharing a container of posts useless
+;; on its own — the reader is admitted to the container and refused every
+;; file in it.
+;;
+;; Both servers do support inheritance, under different names and through
+;; different APIs, so this is the one place the app can't paper over the
+;; difference:
+;;
+;;   WAC (CSS)  an authorisation with acl:default in the container's .acl
+;;   ACP (ESS)  a policy linked from the ACR as acp:memberAccessControl
+;;
+;; Either way it applies to what is *in* the container when a request is
+;; made, not to what was there when the rule was written — so this covers
+;; existing files and future ones alike, with no walk over the contents.
+
+(def ^:private acp sc/acp_ess_2)
+
+;; ACP's own vocabulary. Needed because solid-client offers no way to
+;; read a *member* policy: getResourcePolicy insists the policy appear
+;; in getPolicyUrlAll, which lists only a resource's own, and there is
+;; no public accessor for the access control resource as a dataset. It
+;; is an ordinary RDF document at a known URL, so the way to read what
+;; it says is to fetch and walk it.
+(def ^:private acp-ns "http://www.w3.org/ns/solid/acp#")
+(def ^:private acp-memberAccessControl (str acp-ns "memberAccessControl"))
+(def ^:private acp-apply (str acp-ns "apply"))
+(def ^:private acp-allow (str acp-ns "allow"))
+(def ^:private acp-anyOf (str acp-ns "anyOf"))
+(def ^:private acp-allOf (str acp-ns "allOf"))
+(def ^:private acp-agent (str acp-ns "agent"))
+
+;; ACP borrows WAC's vocabulary for the access modes themselves
+(def ^:private acl-ns "http://www.w3.org/ns/auth/acl#")
+(def ^:private mode-keys {(str acl-ns "Read") :read
+                          (str acl-ns "Append") :append
+                          (str acl-ns "Write") :write})
+
+(def ^:private inheritable-modes
+  "Control is deliberately absent. Handing someone the ability to rewrite
+   the access rules of every file in a container is not something to do
+   as a side effect of sharing it."
+  [[:read "read"] [:append "append"] [:write "write"]])
+
+(defn- wac-default-access+
+  "WAC: an acl:default authorisation on the container, which is what its
+   children inherit when they have no .acl of their own."
+  [url webid access]
+  ;; read-modify-write: a cached ACL would be rewritten over whatever the
+  ;; server actually holds now
+  (p/let [ds (sc/getSolidDatasetWithAcl url (fresh-opts))
+          acl (or (sc/getResourceAcl ds)
+                  ;; A container with no .acl of its own is governed by an
+                  ;; ancestor's. Creating a blank one would silently drop
+                  ;; those rules — including, quite possibly, your own
+                  ;; control access — so seed it from what it inherits.
+                  (if (sc/hasFallbackAcl ds)
+                    (sc/createAclFromFallbackAcl ds)
+                    (sc/createAcl ds)))
+          ;; setAgentDefaultAccess replaces all four modes at once, so
+          ;; the ones not being changed have to be read back first
+          current (js->clj (or (sc/getAgentDefaultAccess acl webid) #js {})
+                           :keywordize-keys true)
+          merged (merge {:read false :append false :write false :control false}
+                        current
+                        (select-keys access [:read :append :write :control]))
+          updated (sc/setAgentDefaultAccess acl webid (clj->js merged))]
+    (sc/saveAclFor ds updated (opts))))
+
+(defn- acp-member-mode
+  "ACP: add or remove one agent for one mode, in a matcher and policy
+   this app owns.
+
+   One pair per mode, named so a later change finds what an earlier one
+   wrote instead of accumulating policies. Modes stay independent, which
+   matters because a caller names only the ones it means to change.
+
+   Note the *Resource* variants throughout. `setPolicy`/`setMatcher` put
+   the Thing in the dataset handed to them — the container's own data —
+   whereas `setResourcePolicy`/`setResourceMatcher` put it in that
+   resource's access control resource, which is the only part
+   `saveAcrFor` writes. Getting this wrong produces an ACR that links a
+   policy URL with no policy behind it: a rule that grants nothing,
+   saved without complaint. The Resource variants also name Things
+   relative to the ACR themselves, so no URL has to be built by hand."
+  [resource mode webid allow?]
+  (let [matcher-name (str "podbay-member-" mode "-matcher")
+        policy-name (str "podbay-member-" mode "-policy")
+        matcher (or (.getResourceMatcher acp resource matcher-name)
+                    (.createResourceMatcherFor acp resource matcher-name))
+        ;; addAgent appends unconditionally, so granting twice would list
+        ;; the same person twice — harmless to evaluate, but it makes the
+        ;; access control resource grow every time anyone re-shares
+        matcher (cond
+                  (not allow?) (.removeAgent acp matcher webid)
+                  (some #{webid} (array-seq (.getAgentAll acp matcher))) matcher
+                  :else (.addAgent acp matcher webid))
+        resource (.setResourceMatcher acp resource matcher)
+        matcher-url (sc/asUrl matcher)
+        ;; Built from scratch every time rather than read and amended.
+        ;; The policy's whole content is one mode and one matcher, so
+        ;; stating it outright is both simpler and idempotent —
+        ;; setResourcePolicy replaces any previous instance. It also
+        ;; sidesteps getResourcePolicy, which returns null for a policy
+        ;; linked as a *member* policy however plainly it is there: it
+        ;; requires the policy to be in getPolicyUrlAll, and that lists
+        ;; only the resource's own.
+        policy (-> (.createResourcePolicyFor acp resource policy-name)
+                   (as-> p (.setAllowModes acp p
+                                           #js {:read (= mode "read")
+                                                :append (= mode "append")
+                                                :write (= mode "write")
+                                                :controlRead false
+                                                :controlWrite false}))
+                   (as-> p (.addAnyOfMatcherUrl acp p matcher-url)))
+        resource (.setResourcePolicy acp resource policy)
+        policy-url (sc/asUrl policy)]
+    (if (and allow?
+             (not (some #{policy-url}
+                        (array-seq (.getMemberPolicyUrlAll acp resource)))))
+      (.addMemberPolicyUrl acp resource policy-url)
+      ;; on revoke the policy stays linked but matches nobody, which is
+      ;; what keeps the other agents it grants working
+      resource)))
+
+(defn- acp-member-access+ [url webid access]
+  ;; read-modify-write, as above
+  (p/let [resource (.getSolidDatasetWithAcr acp url (fresh-opts))]
+    (if-not (.hasAccessibleAcr acp resource)
+      (p/rejected (js/Error. (str "This pod uses ACP but won't let us read the "
+                                  "access control resource for " url)))
+      (let [acr-url (.getLinkedAcrUrl acp resource)
+            updated (reduce (fn [res [k mode]]
+                              (if (contains? access k)
+                                (acp-member-mode res mode webid (get access k))
+                                res))
+                            resource
+                            inheritable-modes)]
+        (p/let [_ (.saveAcrFor acp updated (opts))]
+          {:mechanism :acp :acr-url acr-url})))))
+
+(defn- policy-grants
+  "One policy as {webid {:read true …}}, or nil if it grants nothing.
+
+   Only anyOf is followed. allOf means *every* matcher must match, so a
+   policy carrying one can't be read off as a simple list of people —
+   rather than guess, such a policy is skipped and the caller says the
+   rules are more complex than it can show. noneOf likewise."
+  [acr policy]
+  (let [modes (->> (array-seq (sc/getUrlAll policy acp-allow))
+                   (keep mode-keys)
+                   (into {} (map (fn [k] [k true]))))
+        agents (when (empty? (array-seq (sc/getUrlAll policy acp-allOf)))
+                 (->> (array-seq (sc/getUrlAll policy acp-anyOf))
+                      (keep #(sc/getThing acr %))
+                      (mapcat #(array-seq (sc/getUrlAll % acp-agent)))))]
+    (when (and (seq modes) (seq agents))
+      (into {} (map (fn [a] [a modes])) agents))))
+
+(defn parent-container
+  "The container holding `url`, or nil at the top. Works for a container
+   too — its parent is the one above it."
+  [url]
+  (let [trimmed (cond-> url (str/ends-with? url "/") (subs 0 (dec (count url))))
+        cut (str/last-index-of trimmed "/")]
+    (when (and cut (> cut (count "https:/")))
+      (subs trimmed 0 (inc cut)))))
+
+(defn ancestor-containers
+  "Every container from the one holding `url` up to and including
+   `root`, nearest first. Empty when `url` is the root or outside it —
+   a pod is the top of the world here, and walking past it would mean
+   asking a server about resources that aren't part of this storage."
+  [url root]
+  (when (and url root (str/starts-with? url root) (not= url root))
+    (loop [u (parent-container url) out []]
+      (if (and u (str/starts-with? u root) (>= (count u) (count root)))
+        (if (= u root)
+          (conj out u)
+          (recur (parent-container u) (conj out u)))
+        out))))
+
+(defn member-access+
+  "Who the *contents* of a container inherit access from it, read from
+   the container's own access control resource.
+
+   Returns {:agents {webid {…}}}, covering only the rules this ACR
+   actually contains. ESS also links an ancestor's access controls by
+   URL into that ancestor's own ACR rather than copying them; those are
+   skipped here because the caller walks the ancestors anyway, and
+   resolving them would visit the same rules twice.
+
+   Assumes the pod is ACP; callers check once rather than per level."
+  [url]
+  (-> (p/let [;; resource *info* rather than the dataset: this only
+              ;; needs the Link header naming the ACR, and on a
+              ;; container the dataset would be the whole listing
+              resource (.getResourceInfoWithAcr acp url (fresh-opts))]
+        (when (.hasAccessibleAcr acp resource)
+          (p/let [acr-url (.getLinkedAcrUrl acp resource)
+                  ;; fetched as a plain document: the parsed ACR inside
+                  ;; `resource` is reachable only through internals
+                  acr (sc/getSolidDataset acr-url (fresh-opts))]
+            ;; Found by looking for the predicate rather than by
+            ;; assuming the document's subject is its own URL. Nothing
+            ;; else carries acp:memberAccessControl, so this is exact,
+            ;; and it doesn't depend on a naming convention that varies
+            ;; between servers.
+            ;; keep resolves only the access controls this document
+            ;; defines; a link into an ancestor's ACR finds nothing here
+            ;; and drops out, which is what we want
+            {:agents (->> (array-seq (sc/getThingAll acr))
+                          (mapcat #(array-seq
+                                    (sc/getUrlAll % acp-memberAccessControl)))
+                          distinct
+                          (keep #(sc/getThing acr %))
+                          (mapcat #(array-seq (sc/getUrlAll % acp-apply)))
+                          (keep #(sc/getThing acr %))
+                          (keep #(policy-grants acr %))
+                          (apply merge-with merge))})))
+      ;; one unreadable level must not blank the whole chain — being
+      ;; refused control access on an ancestor is ordinary
+      (p/catch (fn [e]
+                 (js/console.warn "Couldn't read member access for" url e)
+                 {:error (or (some-> ^js e .-message) (str e))}))))
+
+(defn access-context+
+  "Everything the sharing pane needs that the access API can't report:
+
+     :own        what this container grants its own contents (nil for a
+                 file, which has no contents)
+     :inherited  what `url` inherits from the containers above it,
+                 nearest first, as [{:container :agents :error}]
+
+   Only levels that grant something, or that couldn't be read, appear
+   in :inherited — a chain of containers granting nothing isn't worth
+   four lines of interface. Levels are read concurrently, since they're
+   independent and doing them in turn would make opening a deep file
+   noticeably slow.
+
+   Resolves to nil on a pod that isn't ACP, where inheritance is
+   acl:default and the access API already accounts for it. The one ACP
+   check covers every level: a pod is one system or the other."
+  [url root]
+  (p/let [acp? (.isAcpControlled acp url (opts))]
+    (when acp?
+      (p/let [containers (ancestor-containers url root)
+              own (when (str/ends-with? url "/") (member-access+ url))
+              results (p/all (map member-access+ containers))]
+        {:own own
+         :inherited (->> (map (fn [container result]
+                                (assoc result :container container))
+                              containers results)
+                         (filter #(or (seq (:agents %)) (:error %)))
+                         vec)}))))
+
+(defn set-inherited-access+
+  "Set what one person may do with the *contents* of a container.
+
+   Chooses the mechanism from the server rather than from configuration,
+   since a pod is one or the other and only it can say which. Resolves
+   to what it did, so the app can report the mechanism rather than
+   leaving 'nothing appeared to happen' as the only observation."
+  [url webid access]
+  (p/let [acp? (.isAcpControlled acp url (opts))]
+    (if acp?
+      (acp-member-access+ url webid access)
+      (p/let [_ (wac-default-access+ url webid access)]
+        {:mechanism :wac}))))
 
 ;; ---------------------------------------------------------------------------
 ;; Writing

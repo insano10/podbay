@@ -16,16 +16,27 @@
 (defn- url-ext [url]
   (-> url (str/split #"[?#]") first (str/split #"\.") last str/lower-case))
 
-(defn- short-webid
-  "Compact display form of a WebID, e.g. alice.solidcommunity.net."
-  [webid]
-  (try
-    (.-host (js/URL. webid))
-    (catch :default _ webid)))
+(defn- display-name
+  "What to call someone: the name from their profile, falling back to
+   the whole WebID.
 
-(defn- display-name [webid]
+   The host alone used to be the fallback, and it isn't enough — an ESS
+   WebID is id.inrupt.com/<username>, so the host is the same for every
+   Inrupt user and the path is the only part that identifies anyone. The
+   full URL is unlovely, but it appears only when a profile genuinely
+   couldn't be read, where being unmistakable beats being tidy."
+  [webid]
   (or (get-in @state/db [:profiles webid :name])
-      (short-webid webid)))
+      webid))
+
+(defn- avatar-initial
+  "One letter for someone with no picture. Can't just take the first
+   character of display-name: unresolved, that's now the whole WebID,
+   and every one of those would be an H for https."
+  [webid]
+  (-> (or (get-in @state/db [:profiles webid :name])
+          (try (.-host (js/URL. webid)) (catch :default _ webid)))
+      first str str/upper-case))
 
 (defn- format-date [^js/Date d]
   (if d (.toLocaleString d) "unknown date"))
@@ -330,8 +341,7 @@
      [:header
       (if avatar
         [:img.avatar {:src avatar :alt ""}]
-        [:div.avatar.avatar-fallback
-         (-> (display-name author) first str str/upper-case)])
+        [:div.avatar.avatar-fallback (avatar-initial author)])
       [:div.byline
        [:a.author {:href author :target "_blank" :rel "noopener"
                    :title author}

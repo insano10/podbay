@@ -64,10 +64,23 @@
    applied twice, so neither is retried."
   #{"GET" "HEAD" "OPTIONS" "PUT" "DELETE"})
 
+(def ^:private read-methods
+  "Methods for which falling back to an anonymous request makes sense.
+   A write the server refused our credentials for will not succeed
+   without them either."
+  #{"GET" "HEAD" "OPTIONS"})
+
 (def ^:private max-attempts 3)
 
 (defn- method-of [init]
   (str/upper-case (or (some-> ^js init .-method) "GET")))
+
+(defn- without-credentials
+  "The same request with no session attached. `init` never carries the
+   Authorization header — the session's fetch adds that itself — so the
+   plain fetch is unauthenticated by construction."
+  [init]
+  (js/Object.assign #js {} (or init #js {}) #js {:credentials "omit"}))
 
 (defn- backoff-ms [attempt]
   ;; 300ms then 900ms, plus jitter so a fan-out of parallel requests
@@ -78,15 +91,34 @@
 (defn- pause+ [ms]
   (js/Promise. (fn [resolve] (js/setTimeout resolve ms))))
 
+(declare logged-in?)
+
 (defn auth-fetch
-  "A fetch bound to the current session, retrying transient failures.
+  "A fetch bound to the current session, retrying transient failures and
+   falling back to an anonymous request when our credentials are refused.
 
    Pass this to @inrupt/solid-client calls so requests are
    authenticated. Retries are silent and capped; a request that keeps
-   failing still rejects, and any 4xx comes straight back untouched."
+   failing still rejects, and any 4xx other than 401 comes straight back
+   untouched.
+
+   **The 401 fallback.** Solid means reading pods on servers you have no
+   account with, and a token is only meaningful to the provider that
+   issued it. Inrupt's servers reject an Authorization header they can't
+   validate with a 401 — even for resources that are world-readable
+   anonymously — so a session on solidcommunity.net can otherwise read
+   nothing at all on an ESS pod: not the WebID document, not the public
+   profile, not a public type index. Once credentials have been refused
+   the only access left is public, so this asks again without them.
+
+   Safe in the cases it doesn't help: a private resource answers 401
+   again, and the caller sees the same failure one round trip later. It
+   can't mask an expired session either, since that too still 401s on
+   anything actually private. Reads only — see read-methods."
   ([url] (auth-fetch url nil))
   ([url init]
-   (let [repeatable? (contains? retry-methods (method-of init))]
+   (let [method (method-of init)
+         repeatable? (contains? retry-methods method)]
      (letfn [(retry-or [n fallback]
                (if (and repeatable? (< n max-attempts))
                  (p/let [_ (pause+ (backoff-ms n))]
@@ -102,8 +134,19 @@
                               ;; a rejection means the request never
                               ;; reached the server at all — a dropped
                               ;; connection or a preflight that 502'd
-                              (retry-or n #(p/rejected err))))))]
-       (attempt 1)))))
+                              (retry-or n #(p/rejected err))))))
+             (anonymously [^js resp]
+               (if (and (= 401 (.-status resp))
+                        (contains? read-methods method)
+                        ;; logged out, the session fetch was already
+                        ;; anonymous and this would just repeat it
+                        (logged-in?))
+                 (-> (js/fetch url (without-credentials init))
+                     ;; the unauthenticated attempt failing outright
+                     ;; tells the caller nothing the 401 didn't
+                     (p/catch (constantly resp)))
+                 resp))]
+       (p/then (attempt 1) anonymously)))))
 
 (defn- session-info []
   (.-info ^js session))

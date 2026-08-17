@@ -222,14 +222,85 @@ Note: Losing this permission means losing the ability to grant it back."]])
                      (reset! webid ""))}
         (if busy? "Applying…" "Grant")]])))
 
-(defn- propagation-note []
+(defn- inherited-note
+  "What was written to make the container's contents inherit the grant.
+
+   Reported separately from the check below because they answer
+   different questions: this one says whether the rule was written, that
+   one says whether the server honoured it. Collapsing them into a
+   single pass/fail was what made a failure impossible to place."
+  []
+  (when-let [{:keys [ok? mechanism acr-url message]} (:inherited @state/db)]
+    (if ok?
+      [:p.hint
+       (case mechanism
+         :acp "Also wrote an ACP member policy, so the rule applies to
+               everything in this container."
+         :wac "Also wrote an acl:default authorisation, so the rule applies
+               to everything in this container."
+         "Also wrote an inherited access rule for this container's contents.")
+       (when acr-url
+         [:<> " "
+          [:a {:href acr-url :target "_blank" :rel "noopener"}
+           "Open the access control resource"]
+          " to see it — look for #podbay-member-read-policy."])]
+      [:p.warn
+       "Couldn't write the rule that makes this container's contents
+        inherit the grant"
+       (when message [:<> ": " [:span.mono message]])
+       ". The container itself was still changed."])))
+
+(defn- propagation-note
+  "Whether the grant reached the container's contents. Only shown where
+   the answer means something — see state/check-propagation!, which
+   doesn't run on ACP."
+  []
   (when-let [{:keys [child reached?]} (:propagation @state/db)]
     [:p {:class (if reached? "hint" "warn")}
      (if reached?
        (str "Checked “" child "” inside this container: the grant reached it.")
        (str "Checked “" child "” inside this container: the grant did NOT reach
-             it. This server doesn't extend a container's access to its
-             contents — grant on the items themselves."))]))
+             it. A file with its own access rules doesn't inherit the
+             container's — grant on that file directly."))]))
+
+(defn- agent-grants [agents]
+  [:dl
+   (for [[agent-webid access] (sort agents)]
+     ^{:key agent-webid}
+     [:<>
+      [:dt.agent {:title agent-webid} (short-webid agent-webid)]
+      [:dd [modes-granted access]]])])
+
+(defn- member-access-note
+  "Access that doesn't live on this resource: what a container grants
+   its contents, and what this resource inherits from above.
+
+   ACP keeps both in the containers' access control resources, where
+   the access API can't see them. Without this, a file in a shared
+   container reads as shared with nobody — technically 'nothing is set
+   here', but anyone would read it as 'nobody can see this'."
+  []
+  (when-let [{:keys [own inherited]} (:member-access @state/db)]
+    (when (or (seq (:agents own)) (seq inherited))
+      [:div.member-access
+       (when (seq (:agents own))
+         [:<>
+          [:h3 "Everything inside this container"]
+          [agent-grants (:agents own)]])
+
+       (when (seq inherited)
+         [:<>
+          [:h3 "Inherited from"]
+          ;; every level here grants something or failed to be read —
+          ;; a container that adds nothing is filtered out upstream
+          (for [{:keys [container agents error]} inherited]
+            ^{:key container}
+            [:div.inherited-from
+             [:p.from {:title container} (state/container-label container)]
+             (if error
+               [:p.hint "Couldn't read this container's rules — "
+                [:span.mono error]]
+               [agent-grants agents])])])])))
 
 (defn- sharing-pane []
   (let [{:keys [status public agents message url]} (:access @state/db)
@@ -278,14 +349,20 @@ Note: Losing this permission means losing the ability to grant it back."]])
                  :title (str "Remove access for " agent-webid)
                  :on-click #(state/ask-revoke! agent-webid)}
                 "Revoke"]]])]
-          [:p.hint "No individual people have been given access."])
+          ;; Carefully worded. On ACP this list is only what is set on
+          ;; *this* resource: access inherited from a container lives in
+          ;; that container's rules and is invisible here, so claiming
+          ;; nobody has access would be false for every file in a shared
+          ;; container.
+          [:p.hint "Nobody has been given access here."])
 
+        [member-access-note]
         [add-person]
+        [inherited-note]
         [propagation-note]
         (when (str/ends-with? (or url "") "/")
-          [:p.hint "Granting here covers the container. Whether it also covers
-                    what's inside depends on the server — the check above
-                    says which."])]
+          [:p.hint "Granting here covers the container and everything in it.
+                    Files with access rules of their own keep them."])]
 
        nil)
      (when (and (= :denied status) message)
