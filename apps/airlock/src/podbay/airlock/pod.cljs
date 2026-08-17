@@ -313,6 +313,15 @@
 (def ^:private acp-allOf (str acp-ns "allOf"))
 (def ^:private acp-agent (str acp-ns "agent"))
 
+(def ^:private acp-sentinels
+  "Values that appear in acp:agent but aren't anyone's WebID. ACP writes
+   'everyone' as an agent with a magic IRI rather than a predicate of
+   its own, so any list of agents has to be sieved before it can be
+   shown as a list of people."
+  #{(str acp-ns "PublicAgent")
+    (str acp-ns "AuthenticatedAgent")
+    (str acp-ns "CreatorAgent")})
+
 ;; ACP borrows WAC's vocabulary for the access modes themselves
 (def ^:private acl-ns "http://www.w3.org/ns/auth/acl#")
 (def ^:private mode-keys {(str acl-ns "Read") :read
@@ -325,10 +334,16 @@
    as a side effect of sharing it."
   [[:read "read"] [:append "append"] [:write "write"]])
 
+(defn- public?
+  "Is this change about everyone, rather than one named person? The
+   subject of a grant is either a WebID or the keyword :public."
+  [subject]
+  (= :public subject))
+
 (defn- wac-default-access+
   "WAC: an acl:default authorisation on the container, which is what its
    children inherit when they have no .acl of their own."
-  [url webid access]
+  [url subject access]
   ;; read-modify-write: a cached ACL would be rewritten over whatever the
   ;; server actually holds now
   (p/let [ds (sc/getSolidDatasetWithAcl url (fresh-opts))
@@ -340,14 +355,19 @@
                   (if (sc/hasFallbackAcl ds)
                     (sc/createAclFromFallbackAcl ds)
                     (sc/createAcl ds)))
-          ;; setAgentDefaultAccess replaces all four modes at once, so
-          ;; the ones not being changed have to be read back first
-          current (js->clj (or (sc/getAgentDefaultAccess acl webid) #js {})
+          ;; the setters replace all four modes at once, so the ones not
+          ;; being changed have to be read back first
+          current (js->clj (or (if (public? subject)
+                                 (sc/getPublicDefaultAccess acl)
+                                 (sc/getAgentDefaultAccess acl subject))
+                               #js {})
                            :keywordize-keys true)
           merged (merge {:read false :append false :write false :control false}
                         current
                         (select-keys access [:read :append :write :control]))
-          updated (sc/setAgentDefaultAccess acl webid (clj->js merged))]
+          updated (if (public? subject)
+                    (sc/setPublicDefaultAccess acl (clj->js merged))
+                    (sc/setAgentDefaultAccess acl subject (clj->js merged)))]
     (sc/saveAclFor ds updated (opts))))
 
 (defn- acp-member-mode
@@ -358,6 +378,8 @@
    wrote instead of accumulating policies. Modes stay independent, which
    matters because a caller names only the ones it means to change.
 
+   `subject` is a WebID, or :public for everyone.
+
    Note the *Resource* variants throughout. `setPolicy`/`setMatcher` put
    the Thing in the dataset handed to them — the container's own data —
    whereas `setResourcePolicy`/`setResourceMatcher` put it in that
@@ -365,48 +387,89 @@
    `saveAcrFor` writes. Getting this wrong produces an ACR that links a
    policy URL with no policy behind it: a rule that grants nothing,
    saved without complaint. The Resource variants also name Things
-   relative to the ACR themselves, so no URL has to be built by hand."
-  [resource mode webid allow?]
-  (let [matcher-name (str "podbay-member-" mode "-matcher")
+   relative to the ACR themselves, so no URL has to be built by hand.
+
+   Agents and the public get **separate matchers**, both linked from the
+   one policy by anyOf. They could share one — ACP writes 'everyone' as
+   acp:agent with a sentinel IRI, so it's the same predicate — but then
+   revoking a person and making a container private would be editing
+   one list, and the emptiness test that decides whether the policy
+   still constrains anything would have to distinguish the sentinel
+   from a WebID. Two matchers keep the two questions apart, and anyOf
+   across them is unambiguously 'either'."
+  [resource mode subject allow?]
+  (let [agent-name (str "podbay-member-" mode "-matcher")
+        public-name (str "podbay-member-" mode "-public-matcher")
         policy-name (str "podbay-member-" mode "-policy")
-        matcher (or (.getResourceMatcher acp resource matcher-name)
-                    (.createResourceMatcherFor acp resource matcher-name))
-        ;; addAgent appends unconditionally, so granting twice would list
-        ;; the same person twice — harmless to evaluate, but it makes the
-        ;; access control resource grow every time anyone re-shares
-        matcher (cond
-                  (not allow?) (.removeAgent acp matcher webid)
-                  (some #{webid} (array-seq (.getAgentAll acp matcher))) matcher
-                  :else (.addAgent acp matcher webid))
-        resource (.setResourceMatcher acp resource matcher)
-        matcher-url (sc/asUrl matcher)
+        agent-m (or (.getResourceMatcher acp resource agent-name)
+                    (.createResourceMatcherFor acp resource agent-name))
+        public-m (or (.getResourceMatcher acp resource public-name)
+                     (.createResourceMatcherFor acp resource public-name))
+        ;; only the matcher this subject belongs to changes; the other is
+        ;; carried through untouched so a public grant can't disturb the
+        ;; people already named, or the reverse
+        [agent-m public-m]
+        (if (public? subject)
+          ;; setPublic is addIri, so calling it twice writes the sentinel
+        ;; twice — the same trap addAgent has
+        [agent-m (cond
+                     (not allow?) (.removePublic acp public-m)
+                     (.hasPublic acp public-m) public-m
+                     :else (.setPublic acp public-m))]
+          ;; addAgent appends unconditionally, so granting twice would
+          ;; list the same person twice — harmless to evaluate, but the
+          ;; access control resource grows every time anyone re-shares
+          [(cond
+             (not allow?) (.removeAgent acp agent-m subject)
+             (some #{subject} (array-seq (.getAgentAll acp agent-m))) agent-m
+             :else (.addAgent acp agent-m subject))
+           public-m])
+        resource (->> agent-m (.setResourceMatcher acp resource))
+        resource (->> public-m (.setResourceMatcher acp resource))
+        ;; A matcher constraining nothing must never be linked: an anyOf
+        ;; naming an empty matcher is a rule with nothing to test, and
+        ;; the safe reading of that is not the one to gamble a pod on.
+        live (cond-> []
+               (seq (array-seq (.getAgentAll acp agent-m)))
+               (conj (sc/asUrl agent-m))
+               (.hasPublic acp public-m)
+               (conj (sc/asUrl public-m)))
         ;; Built from scratch every time rather than read and amended.
-        ;; The policy's whole content is one mode and one matcher, so
+        ;; The policy's whole content is one mode and its matchers, so
         ;; stating it outright is both simpler and idempotent —
         ;; setResourcePolicy replaces any previous instance. It also
         ;; sidesteps getResourcePolicy, which returns null for a policy
         ;; linked as a *member* policy however plainly it is there: it
         ;; requires the policy to be in getPolicyUrlAll, and that lists
         ;; only the resource's own.
+        ;; With nobody left the policy is written granting nothing, and
+        ;; unlinked below. It can't simply be deleted: removeResourcePolicy
+        ;; goes through getResourcePolicy, which refuses a member policy
+        ;; and returns the resource untouched — so the choice is between
+        ;; leaving an "allow Read" behind and leaving an inert husk, and
+        ;; the husk is the one that can't be misread.
+        granting? (seq live)
         policy (-> (.createResourcePolicyFor acp resource policy-name)
                    (as-> p (.setAllowModes acp p
-                                           #js {:read (= mode "read")
-                                                :append (= mode "append")
-                                                :write (= mode "write")
+                                           #js {:read (boolean
+                                                       (and granting? (= mode "read")))
+                                                :append (boolean
+                                                         (and granting? (= mode "append")))
+                                                :write (boolean
+                                                        (and granting? (= mode "write")))
                                                 :controlRead false
                                                 :controlWrite false}))
-                   (as-> p (.addAnyOfMatcherUrl acp p matcher-url)))
-        resource (.setResourcePolicy acp resource policy)
-        policy-url (sc/asUrl policy)]
-    (if (and allow?
-             (not (some #{policy-url}
-                        (array-seq (.getMemberPolicyUrlAll acp resource)))))
-      (.addMemberPolicyUrl acp resource policy-url)
-      ;; on revoke the policy stays linked but matches nobody, which is
-      ;; what keeps the other agents it grants working
-      resource)))
+                   (as-> p (reduce #(.addAnyOfMatcherUrl acp %1 %2) p live)))
+        policy-url (sc/asUrl policy)
+        resource (.setResourcePolicy acp resource policy)]
+    (if granting?
+      (cond-> resource
+        (not (some #{policy-url}
+                   (array-seq (.getMemberPolicyUrlAll acp resource))))
+        (as-> r (.addMemberPolicyUrl acp r policy-url)))
+      (.removeMemberPolicyUrl acp resource policy-url))))
 
-(defn- acp-member-access+ [url webid access]
+(defn- acp-member-access+ [url subject access]
   ;; read-modify-write, as above
   (p/let [resource (.getSolidDatasetWithAcr acp url (fresh-opts))]
     (if-not (.hasAccessibleAcr acp resource)
@@ -415,7 +478,7 @@
       (let [acr-url (.getLinkedAcrUrl acp resource)
             updated (reduce (fn [res [k mode]]
                               (if (contains? access k)
-                                (acp-member-mode res mode webid (get access k))
+                                (acp-member-mode res mode subject (get access k))
                                 res))
                             resource
                             inheritable-modes)]
@@ -423,7 +486,8 @@
           {:mechanism :acp :acr-url acr-url})))))
 
 (defn- policy-grants
-  "One policy as {webid {:read true …}}, or nil if it grants nothing.
+  "One policy as {subject {:read true …}}, or nil if it grants nothing.
+   Subjects are WebIDs, plus :public for a matcher naming everyone.
 
    Only anyOf is followed. allOf means *every* matcher must match, so a
    policy carrying one can't be read off as a simple list of people —
@@ -433,12 +497,22 @@
   (let [modes (->> (array-seq (sc/getUrlAll policy acp-allow))
                    (keep mode-keys)
                    (into {} (map (fn [k] [k true]))))
-        agents (when (empty? (array-seq (sc/getUrlAll policy acp-allOf)))
-                 (->> (array-seq (sc/getUrlAll policy acp-anyOf))
-                      (keep #(sc/getThing acr %))
-                      (mapcat #(array-seq (sc/getUrlAll % acp-agent)))))]
-    (when (and (seq modes) (seq agents))
-      (into {} (map (fn [a] [a modes])) agents))))
+        matchers (when (empty? (array-seq (sc/getUrlAll policy acp-allOf)))
+                   (->> (array-seq (sc/getUrlAll policy acp-anyOf))
+                        (keep #(sc/getThing acr %))))
+        ;; "everyone" is not a separate predicate: it's acp:agent with a
+        ;; sentinel IRI, so the agent list has to be sieved rather than
+        ;; taken at face value. The other sentinels — AuthenticatedAgent,
+        ;; CreatorAgent — are real ACP concepts this app doesn't write
+        ;; and can't render, so they're dropped rather than shown as
+        ;; though they were someone's WebID.
+        named (->> matchers
+                   (mapcat #(array-seq (sc/getUrlAll % acp-agent)))
+                   (remove acp-sentinels))
+        subjects (cond-> named
+                   (some #(.hasPublic acp %) matchers) (conj :public))]
+    (when (and (seq modes) (seq subjects))
+      (into {} (map (fn [s] [s modes])) subjects))))
 
 (defn parent-container
   "The container holding `url`, or nil at the top. Works for a container
@@ -538,17 +612,18 @@
                          vec)}))))
 
 (defn set-inherited-access+
-  "Set what one person may do with the *contents* of a container.
+  "Set what `subject` — a WebID, or :public for everyone — may do with
+   the *contents* of a container.
 
    Chooses the mechanism from the server rather than from configuration,
    since a pod is one or the other and only it can say which. Resolves
    to what it did, so the app can report the mechanism rather than
    leaving 'nothing appeared to happen' as the only observation."
-  [url webid access]
+  [url subject access]
   (p/let [acp? (.isAcpControlled acp url (opts))]
     (if acp?
-      (acp-member-access+ url webid access)
-      (p/let [_ (wac-default-access+ url webid access)]
+      (acp-member-access+ url subject access)
+      (p/let [_ (wac-default-access+ url subject access)]
         {:mechanism :wac}))))
 
 ;; ---------------------------------------------------------------------------

@@ -5,9 +5,13 @@
     - claude added inheritance support, dig into what this actually does with regards to persistent ACLs
     - is airlock showing correct file permissions for ESS with inheritance policy in parent container ACR?
     - test all this works in reverse from ESS->CSS too
-    - can we do groups with permissions? seems extreme to list all friends on a container
  - ensure it is obvious for a first time user what steps to follow
+    - how do you easily enter a webId
+    - how do you easily grant access to your posts folder?
+    - can we use an inbox message the user can click from within airlock to do the correct thing?
  - also remove connection
+ - why is ESS default-public readable by webId www.w3.org?
+ - can we do groups with permissions? seems extreme to list all friends on a container
  - why is contacts.ttl in solid-social container in CSS? where should it go?
     - there's also one in podbay/comms/contacts.ttl
  - tests?

@@ -310,10 +310,15 @@
                             :reached? (boolean (:read child-access))})))
           (p/catch (fn [_] (swap! db assoc :propagation nil)))))))
 
-(defn- after-access-change! [url webid]
+(defn- after-access-change!
+  "`contents?` says whether the change was meant to reach the
+   container's contents. When it wasn't, there is nothing to verify —
+   reporting that the grant didn't reach them would be scolding the
+   user for what they asked for."
+  [url webid contents?]
   (swap! db assoc :access-busy? false)
   (load-access! url)
-  (when (and webid (str/ends-with? url "/"))
+  (when (and webid contents? (str/ends-with? url "/"))
     (check-propagation! url webid)))
 
 (defn- container-url? [url] (str/ends-with? url "/"))
@@ -326,29 +331,36 @@
    neither implies the other — without the first the container can't be
    opened, and without the second every file in it is refused. They're
    sequential because the second reads the access control resource the
-   first has just rewritten."
-  [webid access]
-  (when-let [url (:url (:access @db))]
-    (swap! db assoc :access-busy? true :propagation nil :inherited nil)
-    (-> (pod/set-agent-access+ url webid access)
-        (p/then (fn [_]
-                  (when (container-url? url)
-                    ;; reported separately from the grant itself: it is a
-                    ;; distinct write against a distinct API, and when
-                    ;; sharing doesn't work this is the half that decides
-                    ;; whether the cause is "we didn't write it" or "the
-                    ;; server didn't honour it"
-                    (-> (pod/set-inherited-access+ url webid access)
-                        (p/then #(swap! db assoc :inherited (assoc % :ok? true)))
-                        (p/catch (fn [e]
-                                   (js/console.warn "Inherited access failed" e)
-                                   (swap! db assoc :inherited
-                                          {:ok? false :message (.-message e)})
-                                   nil))))))
-        (p/then (fn [_] (after-access-change! url webid)))
-        (p/catch (fn [e]
-                   (swap! db assoc :access-busy? false)
-                   (set-error! (describe (str "Couldn't change access for " webid) e)))))))
+   first has just rewritten.
+
+   `:contents?` (default true) covers the second write. Off, the grant
+   stops at the container, which is what an inbox wants: append to the
+   container so people can drop files in, without append on what's
+   already there. Revoking always passes true — leaving inherited
+   access behind after taking it away is the direction that hurts."
+  ([webid access] (grant-agent! webid access {:contents? true}))
+  ([webid access {:keys [contents?] :or {contents? true}}]
+   (when-let [url (:url (:access @db))]
+     (swap! db assoc :access-busy? true :propagation nil :inherited nil)
+     (-> (pod/set-agent-access+ url webid access)
+         (p/then (fn [_]
+                   (when (and contents? (container-url? url))
+                     ;; reported separately from the grant itself: it is
+                     ;; a distinct write against a distinct API, and when
+                     ;; sharing doesn't work this is the half that decides
+                     ;; whether the cause is "we didn't write it" or "the
+                     ;; server didn't honour it"
+                     (-> (pod/set-inherited-access+ url webid access)
+                         (p/then #(swap! db assoc :inherited (assoc % :ok? true)))
+                         (p/catch (fn [e]
+                                    (js/console.warn "Inherited access failed" e)
+                                    (swap! db assoc :inherited
+                                           {:ok? false :message (.-message e)})
+                                    nil))))))
+         (p/then (fn [_] (after-access-change! url webid contents?)))
+         (p/catch (fn [e]
+                    (swap! db assoc :access-busy? false)
+                    (set-error! (describe (str "Couldn't change access for " webid) e))))))))
 
 (defn ask-revoke! [webid]
   (swap! db assoc :revoking webid))
@@ -372,11 +384,28 @@
                   (cond-> {:read false :append false :write false}
                     (not (revoking-self? webid)) (assoc :control false)))))
 
-(defn set-public! [access]
+(defn set-public!
+  "Change what everyone — including people who aren't signed in — can do.
+
+   On a container this reaches the contents too, the same as an agent
+   grant: making a folder public and finding every file in it still
+   private would be the same failure, only quieter, because there is no
+   named person to notice it isn't working."
+  [access]
   (when-let [url (:url (:access @db))]
-    (swap! db assoc :access-busy? true :propagation nil :confirm-public nil)
+    (swap! db assoc :access-busy? true :propagation nil :confirm-public nil
+                    :inherited nil)
     (-> (pod/set-public-access+ url access)
-        (p/then (fn [_] (after-access-change! url nil)))
+        (p/then (fn [_]
+                  (when (container-url? url)
+                    (-> (pod/set-inherited-access+ url :public access)
+                        (p/then #(swap! db assoc :inherited (assoc % :ok? true)))
+                        (p/catch (fn [e]
+                                   (js/console.warn "Public inherited access failed" e)
+                                   (swap! db assoc :inherited
+                                          {:ok? false :message (.-message e)})
+                                   nil))))))
+        (p/then (fn [_] (after-access-change! url nil false)))
         (p/catch (fn [e]
                    (swap! db assoc :access-busy? false)
                    (set-error! (describe "Couldn't change public access" e)))))))

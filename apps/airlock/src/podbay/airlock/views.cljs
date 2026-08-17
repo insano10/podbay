@@ -197,8 +197,13 @@ Note: Losing this permission means losing the ability to grant it back."]])
 (defn- add-person []
   (r/with-let [webid (r/atom "")
                modes (r/atom #{:read})
+               ;; ticked by default: "share this folder" nearly always
+               ;; means its contents, and a grant that stops at the
+               ;; container is the failure this whole area was fixing
+               contents? (r/atom true)
                toggle! (fn [m] (swap! modes #(if (% m) (disj % m) (conj % m))))]
     (let [busy? (:access-busy? @state/db)
+          container? (str/ends-with? (or (:url (:access @state/db)) "") "/")
           valid? (str/starts-with? (str/trim @webid) "http")]
       [:div.grant
        [:input {:type "url"
@@ -213,12 +218,20 @@ Note: Losing this permission means losing the ability to grant it back."]])
           [:label [:input {:type "checkbox"
                            :checked (contains? @modes m)
                            :on-change #(toggle! m)}] label])]
+       (when container?
+         [:label.grant-contents
+          [:input {:type "checkbox"
+                   :checked @contents?
+                   :disabled busy?
+                   :on-change #(swap! contents? not)}]
+          "and everything inside it"])
        [:button.primary
         {:disabled (or busy? (not valid?) (empty? @modes))
          :on-click (fn []
                      (state/grant-agent!
                       (str/trim @webid)
-                      (into {} (for [m [:read :append :write]] [m (contains? @modes m)])))
+                      (into {} (for [m [:read :append :write]] [m (contains? @modes m)]))
+                      {:contents? @contents?})
                      (reset! webid ""))}
         (if busy? "Applying…" "Grant")]])))
 
@@ -263,12 +276,18 @@ Note: Losing this permission means losing the ability to grant it back."]])
              it. A file with its own access rules doesn't inherit the
              container's — grant on that file directly."))]))
 
-(defn- agent-grants [agents]
+(defn- agent-grants
+  "Subjects are WebIDs, plus :public for a rule naming everyone. Public
+   sorts first and is labelled in words — it is the one entry where the
+   difference matters most and a URL would say least."
+  [subjects]
   [:dl
-   (for [[agent-webid access] (sort agents)]
-     ^{:key agent-webid}
+   (for [[subject access] (sort-by #(if (= :public (key %)) "" (key %)) subjects)]
+     ^{:key (str subject)}
      [:<>
-      [:dt.agent {:title agent-webid} (short-webid agent-webid)]
+      (if (= :public subject)
+        [:dt.agent.everyone "Anyone on the web"]
+        [:dt.agent {:title subject} (short-webid subject)])
       [:dd [modes-granted access]]])])
 
 (defn- member-access-note
@@ -361,8 +380,9 @@ Note: Losing this permission means losing the ability to grant it back."]])
         [inherited-note]
         [propagation-note]
         (when (str/ends-with? (or url "") "/")
-          [:p.hint "Granting here covers the container and everything in it.
-                    Files with access rules of their own keep them."])]
+          [:p.hint "Granting here covers the container itself, and its
+                    contents too unless you untick that. Files with access
+                    rules of their own keep them either way."])]
 
        nil)
      (when (and (= :denied status) message)

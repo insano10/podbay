@@ -281,6 +281,42 @@ What it does today:
   **Control is never inherited.** Being able to rewrite the access rules
   of every file in a container is not something to hand over as a side
   effect of sharing it.
+
+  **The second write is optional**, via a checkbox on the grant form —
+  *and everything inside it*, ticked by default, shown only for
+  containers. Default on because that's what "share this folder" means,
+  and because a grant that stops at the container is the exact failure
+  this section exists to fix. Off, it expresses the case the coupling
+  gets wrong: an **inbox**, where you want `Append` on the container so
+  people can drop files in, but *not* on the files already there.
+  Unticking also skips the propagation check — reporting that the grant
+  didn't reach the contents would be scolding you for what you asked
+  for. Revoking always clears both regardless; leaving inherited access
+  behind after taking access away is the direction that hurts.
+
+  **Public access inherits the same way.** Ticking "readable by anyone"
+  on a container reaches its contents too, through the same two
+  mechanisms — `setPublicDefaultAccess` on WAC, a member policy on ACP.
+  The subject of a grant is a WebID or the keyword `:public`, and the
+  code paths are otherwise identical.
+
+  ACP has no separate predicate for "everyone": `setPublic` writes
+  `acp:agent` with the sentinel IRI `acp:PublicAgent`. Two consequences
+  worth knowing. Reading an agent list means **sieving the sentinels
+  out** — `PublicAgent`, `AuthenticatedAgent`, `CreatorAgent` — or they
+  render as though they were somebody's WebID. And people and the
+  public get **separate matchers** here, linked from the one policy by
+  `anyOf`: they could share one, but then revoking a person and making
+  a container private would edit the same list, and the emptiness test
+  below would have to tell a sentinel from a WebID.
+
+  When the last subject for a mode goes away, the policy is written
+  granting nothing and unlinked from the member access control. It
+  can't simply be deleted — `removeResourcePolicy` goes through
+  `getResourcePolicy`, which refuses a member policy and returns the
+  resource untouched — so the choice is between leaving an `allow Read`
+  behind and leaving an inert husk. The husk is the one that can't be
+  misread.
 - **The sharing pane shows a container's rules for its contents
   separately**, because on ACP they are a different part of the access
   control resource and the access API doesn't report them at all.

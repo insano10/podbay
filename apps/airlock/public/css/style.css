@@ -412,6 +412,10 @@ img.preview { max-width: 100%; border-radius: 0.5rem; }
 .grant-modes { display: flex; gap: 0.6rem; flex-wrap: wrap; font-size: 0.75rem; }
 .grant-modes label { display: flex; gap: 0.2rem; align-items: center; }
 .grant button.primary { padding: 0.3rem 0.75rem; font-size: 0.8rem; }
+.grant-contents {
+  display: flex; align-items: center; gap: 0.3rem;
+  font-size: 0.75rem; color: var(--text-muted);
+}
 button.revoke { font-size: 0.7rem; margin-left: 0.4rem; }
 .sharing .warn {
   font-size: 0.8rem; color: var(--danger);
