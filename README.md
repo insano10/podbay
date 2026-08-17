@@ -332,8 +332,19 @@ What it does today:
   code paths are otherwise identical.
 
   ACP has no separate predicate for "everyone": `setPublic` writes
-  `acp:agent` with the sentinel IRI `acp:PublicAgent`. Two consequences
-  worth knowing. Reading an agent list means **sieving the sentinels
+  `acp:agent` with the sentinel IRI `acp:PublicAgent`. Three
+  consequences worth knowing.
+
+  **The sharing pane has to filter it out.** `getAgentAccessAll`
+  enumerates people with `getAgentUrlAll`, which reads every
+  `acp:agent` in the access control resource and does **not** drop the
+  sentinels — unlike `getAgentAll`, the matcher accessor, which does.
+  So a publicly readable container listed `acp:PublicAgent` among the
+  named people, with a Revoke button beside it, while public access was
+  *already* reported correctly on its own row above. Rendered short it
+  loses its fragment and reads as `www.w3.org/ns/solid/acp`, which
+  looks like some organisation rather than a sentinel. `agents->map`
+  drops all three. Reading an agent list means **sieving the sentinels
   out** — `PublicAgent`, `AuthenticatedAgent`, `CreatorAgent` — or they
   render as though they were somebody's WebID. And people and the
   public get **separate matchers** here, linked from the one policy by

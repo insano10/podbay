@@ -212,10 +212,35 @@
      :control-read (.-controlRead a)
      :control-write (.-controlWrite a)}))
 
-(defn- agents->map [^js all]
+(def ^:private acp-sentinels
+  "Values that appear in acp:agent but aren't anyone's WebID. ACP has no
+   separate predicate for 'everyone' — it writes an agent with a magic
+   IRI — so any list of agents has to be sieved before it can be shown
+   as a list of people."
+  #{"http://www.w3.org/ns/solid/acp#PublicAgent"
+    "http://www.w3.org/ns/solid/acp#AuthenticatedAgent"
+    "http://www.w3.org/ns/solid/acp#CreatorAgent"})
+
+(defn- agents->map
+  "Named people only.
+
+   getAgentAccessAll enumerates agents with `getAgentUrlAll`, which
+   reads every acp:agent in the access control resource and does *not*
+   filter the sentinels — unlike `getAgentAll`, the matcher accessor,
+   which does. So a publicly readable container reported
+   acp:PublicAgent as though it were a person, listed beside real
+   contacts with a Revoke button. Displayed, it loses its fragment and
+   reads as `www.w3.org/ns/solid/acp`, which looks like an
+   organisation rather than a sentinel.
+
+   Dropping them here loses nothing: public access has its own row,
+   fed by getPublicAccess, so it was being reported twice — once
+   correctly and once as a stranger."
+  [^js all]
   (when all
     (into {}
-          (for [webid (array-seq (js/Object.keys all))]
+          (for [webid (array-seq (js/Object.keys all))
+                :when (not (acp-sentinels webid))]
             [webid (access->map (aget all webid))]))))
 
 (defn- wac-access->map
@@ -349,15 +374,6 @@
 (def ^:private acp-anyOf (str acp-ns "anyOf"))
 (def ^:private acp-allOf (str acp-ns "allOf"))
 (def ^:private acp-agent (str acp-ns "agent"))
-
-(def ^:private acp-sentinels
-  "Values that appear in acp:agent but aren't anyone's WebID. ACP writes
-   'everyone' as an agent with a magic IRI rather than a predicate of
-   its own, so any list of agents has to be sieved before it can be
-   shown as a list of people."
-  #{(str acp-ns "PublicAgent")
-    (str acp-ns "AuthenticatedAgent")
-    (str acp-ns "CreatorAgent")})
 
 ;; ACP borrows WAC's vocabulary for the access modes themselves
 (def ^:private acl-ns "http://www.w3.org/ns/auth/acl#")
