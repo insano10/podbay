@@ -11,7 +11,18 @@
             8081 "apps/airlock/public"}
 
  :builds
- {;; The social feed, published at /comms/
+ {;; `npm test`. Only the pure parts of the app are covered — the
+  ;; mention scanner and the container walk — because everything else
+  ;; here is a conversation with a pod, and a test that mocks one ends
+  ;; up asserting what we believe the server does rather than what it
+  ;; does. Those beliefs have been wrong often enough that a green
+  ;; suite built on them would be worse than none.
+  :test
+  {:target :node-test
+   :output-to "out/node-tests.js"
+   :ns-regexp "-test$"}
+
+  ;; The social feed, published at /comms/
   :comms
   {:target :browser
    :output-dir "apps/comms/public/js"

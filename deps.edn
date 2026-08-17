@@ -4,9 +4,14 @@
  ;; bundle ends up containing the other app's code. The boundary is the
  ;; namespace prefix — podbay.comms.*, podbay.airlock.*, podbay.shared.* —
  ;; rather than the classpath.
+ ;; `test` sits here rather than behind an alias because shadow-cljs
+ ;; resolves one classpath for every build. It costs nothing: builds
+ ;; compile only what their :init-fn reaches, and no app namespace
+ ;; requires a test one, so nothing under test/ can reach a bundle.
  :paths ["shared/src"
          "apps/comms/src"
-         "apps/airlock/src"]
+         "apps/airlock/src"
+         "test"]
 
  ;; With :deps true in shadow-cljs.edn, this file controls the JVM
  ;; classpath — including which shadow-cljs compiler version runs (the

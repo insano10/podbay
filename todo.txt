@@ -1,3 +1,4 @@
+- tests?
 - make adding connection work in feed
  - ensure it is obvious for a first time user what steps to follow
     - how do you easily enter a webId
@@ -6,7 +7,6 @@
     - same for removing follower and revoking access
  - why is ESS default-public readable by webId www.w3.org?
  - can we do groups with permissions? seems extreme to list all friends on a container
- - tests?
  - create some test pods with better test data
     - any more providers to include?
 - make it obvious which pod you are connected to on comms

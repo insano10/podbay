@@ -6,7 +6,8 @@
   "scripts": {
     "dev": "shadow-cljs watch comms airlock",
     "release": "shadow-cljs release comms airlock",
-    "repl": "shadow-cljs cljs-repl comms"
+    "repl": "shadow-cljs cljs-repl comms",
+    "test": "shadow-cljs compile test && node out/node-tests.js"
   },
   "dependencies": {
     "@inrupt/solid-client": "^3.0.0",

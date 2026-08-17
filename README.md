@@ -82,6 +82,37 @@ To try it out you need a Solid pod — free accounts at
 [solidcommunity.net](https://solidcommunity.net) or
 [Inrupt PodSpaces](https://start.inrupt.com/), among others.
 
+### Tests
+
+```sh
+npm test
+```
+
+Compiles the `:test` build (`:node-test`, picking up any `*-test`
+namespace under `test/`) and runs it under Node.
+
+**What's covered, and why so little.** Only the pure parts: the mention
+scanner in `podbay.comms.mentions`, and the container walk in
+`podbay.airlock.pod`. Both have fiddly rules — longest-match against
+names containing spaces, where a mention may start and end, stopping at
+a storage root that sits in a different place on each of the two
+servers — and both can be checked without a browser or a pod.
+
+Everything else in these apps is a conversation with a pod, and a test
+that mocks one asserts *what we believe the server does*, not what it
+does. Those beliefs have been wrong repeatedly here: that a container
+grant reaches its contents, that `getAgentAccessAll` reports rules set
+on a resource, that `saveSolidDatasetAt` overwrites. A green suite
+built on them would have been worse than none, because each of those
+bugs would have passed it. Where library behaviour needed pinning down,
+it was pinned down against the library and the finding written up in
+this README, which doesn't rot into false confidence.
+
+`test/` is on the classpath in `deps.edn` rather than behind an alias,
+because shadow-cljs resolves one classpath for every build. Nothing
+under it can reach a bundle: builds compile only what their `:init-fn`
+reaches, and no app namespace requires a test one.
+
 ### If the app redirects to your pod provider and never comes back
 
 Load **<http://localhost:8080/?reset>**. That clears the stored session

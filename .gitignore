@@ -20,6 +20,8 @@ node_modules/
 # beside these are source and must ship
 apps/*/public/js/
 dist/
+# compiled test runner — `npm test` rebuilds it
+out/
 .clj-kondo/.cache/
 .clj-kondo/imports/
 

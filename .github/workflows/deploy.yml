@@ -57,6 +57,12 @@ jobs:
 
       - run: npm ci
 
+      # Before the release build, so a failing test stops the deploy
+      # rather than being noticed afterwards. Cheap: it reuses the same
+      # warmed Clojure toolchain the build needs anyway.
+      - name: Run tests
+        run: npm test
+
       # Builds into each app's public/js, which is gitignored — the
       # deployed site is compiled here, never committed. This is also the
       # build that stamps in each app's published client ID (see :release
