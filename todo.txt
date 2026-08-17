@@ -1,10 +1,4 @@
 - make adding connection work in feed
- - have followed ESS from CSS account but getting 403 from default-private folder
-    - granted access to container via airlock but it doesn't apply transitively to the posts within
-    - default-public also doesn't allow access to posts (regrant this)
-    - claude added inheritance support, dig into what this actually does with regards to persistent ACLs
-    - is airlock showing correct file permissions for ESS with inheritance policy in parent container ACR?
-    - test all this works in reverse from ESS->CSS too
  - ensure it is obvious for a first time user what steps to follow
     - how do you easily enter a webId
     - how do you easily grant access to your posts folder?
@@ -15,9 +9,8 @@
  - why is contacts.ttl in solid-social container in CSS? where should it go?
     - there's also one in podbay/comms/contacts.ttl
  - tests?
-- revisit the tagging stuff
- - get claude to reapply the shelf (shelved to get connections working first in order to test)
- - don't forget the untracked mentions namespace too
+ - create some test pods with better test data
+    - any more providers to include?
 - make it obvious which pod you are connected to on comms
     - a little tagline under the comms title or something, just to help me distinguish between CSS and ESS now they have display parity
 - read all the code and tidy up anything that needs it

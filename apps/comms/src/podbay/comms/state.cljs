@@ -5,6 +5,7 @@
   (:require [promesa.core :as p]
             [reagent.core :as r]
             [podbay.shared.auth :as auth]
+            [podbay.comms.mentions :as mentions]
             [podbay.comms.pod :as pod]))
 
 (defonce db
@@ -27,6 +28,37 @@
 (defn- set-error! [msg]
   (swap! db assoc :error msg :posting? false :loading-feed? false))
 
+(defn short-webid
+  "Compact display form of a WebID, e.g. alice.solidcommunity.net."
+  [webid]
+  (try
+    (.-host (js/URL. webid))
+    (catch :default _ webid)))
+
+(defn display-name
+  "What to call someone: the name from their profile, falling back to
+   the whole WebID.
+
+   The host alone isn't enough — an ESS WebID is
+   id.inrupt.com/<username>, so the host is identical for every Inrupt
+   user and the path is the only part that identifies anyone. The full
+   URL is unlovely, but it appears only when a profile genuinely
+   couldn't be read, where being unmistakable beats being tidy."
+  [webid]
+  (or (get-in @db [:profiles webid :name])
+      webid))
+
+(defn mention-candidates
+  "Who an @mention in the composer can refer to — the people you follow,
+   under the names currently shown for them.
+
+   Only contacts, because a mention has to resolve to a WebID and there
+   is no directory to look a stranger up in. A profile that hasn't
+   loaded yet falls back to the host, which is still typeable and still
+   resolves; it just reads less well."
+  []
+  (mentions/candidates (:contacts @db) display-name))
+
 (defn- load-profiles! [webids]
   (doseq [webid webids
           :when (not (contains? (:profiles @db) webid))]
@@ -42,6 +74,9 @@
   (swap! db assoc
          :posts-by-author by-author
          :posts (vec (sort-by published-at > (mapcat val by-author))))
+  ;; a post can mention someone you don't follow, whose profile nothing
+  ;; else would fetch — without this the link has no name behind it
+  (load-profiles! (distinct (map :webid (mapcat :mentions (:posts @db)))))
   (load-app-names!))
 
 (defn- load-app-names!
@@ -169,10 +204,16 @@
 
 (defn submit-post!
   "Publish a post (text plus optional media files) to the user's own
-   pod, then refresh the feed. Calls on-done once the post is saved."
+   pod, then refresh the feed. Calls on-done once the post is saved.
+
+   Mentions are derived from the finished text here rather than tracked
+   as it's typed, so what gets written always describes the text as it
+   was actually posted. Only people you follow are candidates: an
+   unrecognised @name stays plain text instead of being guessed at."
   [content files on-done]
   (swap! db assoc :posting? true :error nil)
-  (-> (pod/save-post+ (:webid @db) content files (:destination @db))
+  (-> (pod/save-post+ (:webid @db) content files (:destination @db)
+                      (mentions/extract content (mention-candidates)))
       (p/then (fn [_]
                 (swap! db assoc :posting? false)
                 (on-done)

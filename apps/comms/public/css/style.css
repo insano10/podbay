@@ -363,3 +363,42 @@ img.attachment, video.attachment {
   background: none; border: none; padding: 0; font: inherit;
   color: var(--accent); text-decoration: underline; cursor: pointer;
 }
+
+/* @mentions. The menu is positioned against .compose-box rather than
+   the textarea itself, which can't host absolutely positioned children. */
+.compose-box { position: relative; }
+
+.mention-menu {
+  position: absolute;
+  z-index: 10;
+  left: 0;
+  right: 0;
+  top: 100%;
+  margin: 0.25rem 0 0;
+  padding: 0.25rem;
+  list-style: none;
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: 0.5rem;
+  box-shadow: 0 6px 20px rgb(0 0 0 / 0.18);
+}
+.mention-menu li {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 1rem;
+  padding: 0.35rem 0.5rem;
+  border-radius: 0.375rem;
+  cursor: pointer;
+}
+.mention-menu li.active { background: var(--accent); color: var(--bg); }
+.mention-name { font-weight: 500; }
+/* the WebID host disambiguates two contacts with the same display name */
+.mention-webid { font-size: 0.75rem; opacity: 0.7; }
+
+.post .mention {
+  color: var(--accent);
+  text-decoration: none;
+  font-weight: 500;
+}
+.post .mention:hover { text-decoration: underline; }

@@ -9,6 +9,18 @@
 (def as-published (str as "published"))
 (def as-attachment (str as "attachment"))
 (def as-attributedTo (str as "attributedTo"))
+
+;; Mentioning someone in a post. as:tag points at an as:Mention — a
+;; subtype of as:Link, so it carries as:href (who) and as:name (the text
+;; as written). Deliberately *not* as:to: that is ActivityPub's delivery
+;; and visibility list, and a post naming recipients there without
+;; as:Public reads as a direct message. These posts are a bulletin
+;; board, not a mailbox, and there is no delivery step to route.
+(def as-tag (str as "tag"))
+(def as-Mention (str as "Mention"))
+(def as-href (str as "href"))
+(def as-name (str as "name"))
+
 (def as-generator (str as "generator"))
 (def as-following (str as "following"))
 

@@ -4,6 +4,7 @@
   (:require [clojure.string :as str]
             [promesa.core :as p]
             [reagent.core :as r]
+            [podbay.comms.mentions :as mentions]
             [podbay.comms.pod :as pod]
             [podbay.comms.state :as state]))
 
@@ -16,26 +17,17 @@
 (defn- url-ext [url]
   (-> url (str/split #"[?#]") first (str/split #"\.") last str/lower-case))
 
-(defn- display-name
-  "What to call someone: the name from their profile, falling back to
-   the whole WebID.
-
-   The host alone used to be the fallback, and it isn't enough — an ESS
-   WebID is id.inrupt.com/<username>, so the host is the same for every
-   Inrupt user and the path is the only part that identifies anyone. The
-   full URL is unlovely, but it appears only when a profile genuinely
-   couldn't be read, where being unmistakable beats being tidy."
-  [webid]
-  (or (get-in @state/db [:profiles webid :name])
-      webid))
+;; Both live in state, which holds the profiles they read — mentions
+;; need the same answers when a post is saved, where there is no view.
+(def ^:private display-name state/display-name)
+(def ^:private short-webid state/short-webid)
 
 (defn- avatar-initial
   "One letter for someone with no picture. Can't just take the first
-   character of display-name: unresolved, that's now the whole WebID,
-   and every one of those would be an H for https."
+   character of display-name: unresolved, that's the whole WebID, and
+   every one of those would be an H for https."
   [webid]
-  (-> (or (get-in @state/db [:profiles webid :name])
-          (try (.-host (js/URL. webid)) (catch :default _ webid)))
+  (-> (or (get-in @state/db [:profiles webid :name]) (short-webid webid))
       first str str/upper-case))
 
 (defn- format-date [^js/Date d]
@@ -171,25 +163,136 @@
 
       :else nil)))
 
+;; ---------------------------------------------------------------------------
+;; Mention autocomplete
+;;
+;; Typing @ offers the people you follow. This only helps you type the
+;; name — nothing is recorded here. The mentions written to the pod are
+;; parsed out of the finished text when the post is saved, so editing
+;; the sentence afterwards can never leave the two disagreeing.
+
+(def ^:private mention-fragment
+  "An @ and the partial name after it, at the very end of the text
+   before the caret. Stops at whitespace runs so a name being typed can
+   contain single spaces ('@Jenny Be…'), and at a newline, since a
+   mention can't span one."
+  #"@([^@\n]*)$")
+
+(defn- fragment-at
+  "The partial name being typed before the caret, or nil. The pattern is
+   anchored to the end, so the @ sits a known distance back and there's
+   no need to ask the regex for an index."
+  [text caret]
+  (when-let [[_ fragment] (re-find mention-fragment (subs text 0 caret))]
+    ;; two spaces means the thought moved on; no name has them
+    (when-not (re-find #"\s\s" fragment)
+      {:fragment fragment
+       :start (- caret (count fragment) 1)})))
+
+(defn- suggestions
+  "Candidates matching what's been typed after the @, or nil when the
+   caret isn't in a mention. An exact match still suggests, so the list
+   doesn't vanish the moment a short name is complete."
+  [text caret]
+  (when-let [{:keys [fragment]} (fragment-at text caret)]
+    (let [q (str/lower-case (str "@" fragment))]
+      (->> (state/mention-candidates)
+           (filter #(str/starts-with? (str/lower-case (:label %)) q))
+           (take 6)
+           vec))))
+
+(defn- insert-mention
+  "Replace the fragment being typed with the full label, plus a trailing
+   space so you can carry straight on — unless the text already has one
+   there, which it does whenever you go back to fix a mention mid
+   sentence. Returns [new-text new-caret]."
+  [text caret {:keys [label]}]
+  (let [{:keys [start]} (fragment-at text caret)
+        rest-of (subs text caret)
+        inserted (cond-> label
+                   (not (str/starts-with? rest-of " ")) (str " "))]
+    [(str (subs text 0 start) inserted rest-of)
+     (+ start (count inserted))]))
+
+(defn- mention-menu [items active on-pick]
+  [:ul.mention-menu
+   (doall
+    (for [[i {:keys [webid label] :as item}] (map-indexed vector items)]
+      ^{:key webid}
+      [:li {:class (when (= i active) "active")
+            ;; mousedown, not click: click fires after the textarea has
+            ;; already lost focus and closed the menu
+            :on-mouse-down (fn [e] (.preventDefault e) (on-pick item))}
+       [:span.mention-name label]
+       [:span.mention-webid (short-webid webid)]]))])
+
 (defn composer []
   (r/with-let [text (r/atom "")
                files (r/atom [])
+               caret (r/atom 0)
+               active (r/atom 0)
+               ;; Escape closes the menu without closing anything else;
+               ;; cleared on the next keystroke so typing brings it back
+               dismissed? (r/atom false)
+               textarea (r/atom nil)
                ;; bumping this key remounts the file input, which is the
                ;; only reliable way to clear it after posting
                input-key (r/atom 0)
                clear! (fn []
                         (reset! text "")
                         (reset! files [])
-                        (swap! input-key inc))]
+                        (reset! caret 0)
+                        (swap! input-key inc))
+               sync-caret! (fn [e] (reset! caret (.. e -target -selectionStart)))
+               pick! (fn [item]
+                       (let [[s c] (insert-mention @text @caret item)]
+                         (reset! text s)
+                         (reset! caret c)
+                         (reset! active 0)
+                         ;; the caret belongs after the name just
+                         ;; inserted, not where React would leave it
+                         (when-let [^js el @textarea]
+                           (js/requestAnimationFrame
+                            #(doto el (.focus) (.setSelectionRange c c))))))]
     (let [{:keys [posting?]} @state/db
           can-post? (and (not posting?)
-                         (or (seq (str/trim @text)) (seq @files)))]
+                         (or (seq (str/trim @text)) (seq @files)))
+          items (when-not @dismissed? (suggestions @text @caret))
+          open? (seq items)]
       [:div.composer
-       [:textarea
-        {:placeholder "What's happening?"
-         :value @text
-         :rows 3
-         :on-change #(reset! text (.. % -target -value))}]
+       [:div.compose-box
+        [:textarea
+         {:placeholder "What's happening? Use @ to mention someone."
+          :value @text
+          :rows 3
+          :ref #(reset! textarea %)
+          :on-change (fn [e]
+                       (reset! text (.. e -target -value))
+                       (reset! active 0)
+                       (reset! dismissed? false)
+                       (sync-caret! e))
+          ;; the caret moves without the text changing, and that alone
+          ;; decides whether the menu should be open
+          :on-click sync-caret!
+          :on-key-up (fn [e]
+                       (when-not (#{"ArrowDown" "ArrowUp" "Enter" "Tab" "Escape"}
+                                  (.-key e))
+                         (sync-caret! e)))
+          :on-key-down
+          (fn [^js e]
+            (when open?
+              (case (.-key e)
+                "ArrowDown" (do (.preventDefault e)
+                                (swap! active #(mod (inc %) (count items))))
+                "ArrowUp" (do (.preventDefault e)
+                              (swap! active #(mod (dec %) (count items))))
+                ;; Enter picks rather than posting or breaking the line,
+                ;; which is what every other mention menu does
+                ("Enter" "Tab") (do (.preventDefault e)
+                                    (pick! (nth items @active)))
+                "Escape" (do (.preventDefault e) (reset! dismissed? true))
+                nil)))}]
+        (when open? [mention-menu items @active pick!])]
        [:div.composer-actions
         [:label.file-label
          [:input {:key @input-key
@@ -335,7 +438,30 @@
       :else
       [:a.attachment-link {:href url :target "_blank" :rel "noopener"} url])))
 
-(defn- post-card [{:keys [author content published attachments source generator]}]
+(defn- content-line
+  "One paragraph of a post, with any mentions in it linked.
+
+   The mention's stored text is matched against the content rather than
+   an offset, so an app that rewrites or reflows the text can't leave a
+   link pointing at the wrong words — at worst the mention stops
+   matching and shows as the plain text the author typed."
+  [line mentions]
+  (into [:p]
+        (for [[i part] (map-indexed vector (mentions/scan line mentions))]
+          (if (string? part)
+            part
+            ^{:key i}
+            [:a.mention {:href (:webid part)
+                         :target "_blank"
+                         :rel "noopener"
+                         ;; the display name may have moved on since the
+                         ;; post was written, so name who it resolves to
+                         :title (str (display-name (:webid part))
+                                     " — " (:webid part))}
+             (:label part)]))))
+
+(defn- post-card [{:keys [author content published attachments source
+                          generator mentions]}]
   (let [avatar (get-in @state/db [:profiles author :avatar])]
     [:article.post
      [:header
@@ -355,7 +481,7 @@
      (when (seq content)
        (into [:div.content]
              (for [para (str/split-lines content)]
-               [:p para])))
+               [content-line para mentions])))
      (when (seq attachments)
        (into [:div.attachments]
              (for [url attachments]

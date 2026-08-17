@@ -817,6 +817,75 @@ of apps, so `insano10.github.io` identifies nothing while
 document's own filename and is dropped. The full URL is always in the
 chip's tooltip.
 
+### Mentions
+
+Typing `@` in the composer offers the people you follow; picking one
+splices their name into the text. Mentions are stored as `as:tag`
+pointing at an `as:Mention`, which is a subtype of `as:Link` and so
+carries both halves:
+
+```turtle
+<#post> a as:Note ;
+    as:content "morning @Alice, did the pod sync?" ;
+    as:tag <#mention-0> .
+
+<#mention-0> a as:Mention ;
+    as:href <https://alice.example/profile/card#me> ;
+    as:name "@Alice" .
+```
+
+The post and its mentions are separate subjects in one document, so a
+post still costs one request however many people it names.
+
+The tag is a **relative** reference, and that's deliberate. `addUrl`
+accepts a Thing, and while both are still local nodes the reference
+stays local, so it serialises as `<#mention-0>` rather than repeating
+the document's own address. A document that names its own location
+breaks when it moves: Airlock can move a post, or the container holding
+it, and an absolute tag would go on pointing at where the post used to
+be — `mentions-of` would find nothing there and the mention would
+quietly render as plain text. A relative reference resolves against
+wherever the document now is.
+
+**Not `as:to`.** That's ActivityPub's delivery list, and it doubles as
+the visibility model there: `as:Public` in `to` means public, and a post
+naming only Alice means a direct message to Alice. Comms has no delivery
+— readers pull from containers — so the routing job is vacuous, and
+visibility is the container's access control. Writing `as:to` would
+therefore label ordinary bulletin-board posts as DMs to anything that
+speaks the convention, in files we can't recall. An absent property is
+honest silence; a wrong one is a claim other apps will act on. If a real
+visibility feature turns up later, `as:to` is unspent and can be used
+properly.
+
+**Both halves of a mention are needed.** The `href` is the durable
+identifier — display names change, and are anyway just what the author's
+app happened to call someone — while the `name` is what lets a reader
+find the mention in the content and highlight it in place. Storing the
+literal text rather than a character offset is what makes this robust:
+an app that reflows or rewrites the content can't leave a link pointing
+at the wrong words, and one that ignores tags entirely still shows
+`@Alice` as ordinary text.
+
+**The text is the source of truth.** Mentions are re-derived from the
+finished post at save time rather than tracked while typing, so editing
+a sentence can't leave the RDF describing a mention the text no longer
+contains — deleting half of `@Alice` simply means she isn't mentioned.
+The autocomplete is only a typing aid. Matching is longest-name-first
+against your contacts, which is what makes `@Alice Smith` win over
+`@Alice` despite the space, and it's bounded so `@Alice` isn't found
+inside an email address or in `@Alices`. An `@name` that isn't one of
+your contacts stays plain text: a mention has to resolve to a WebID, and
+Solid has no directory to look a stranger up in.
+
+Mentioned people get their profiles fetched like anyone else, since a
+post can mention someone you don't follow and nothing else in the feed
+would look them up.
+
+The scanner is pure and lives in `podbay.comms.mentions`, separately
+from both the pod I/O and the views, because it's the one piece of this
+that's worth testing without a browser or a pod.
+
 ### Round trips
 
 Pods can be slow: requests to solidcommunity.net have been observed
@@ -1017,6 +1086,23 @@ keeping applied consistently.
   that — open the container, ⓘ, grant their WebID read. Comms now at
   least *says* who will be able to read what you're writing (see below),
   but publishing and sharing remain two separate acts.
+- **Mentions don't notify, and there's no "mentions of me" view.** The
+  data supports both — `as:tag` is queryable and the WebID is exact —
+  but a mention only reaches someone if they already follow you and
+  refresh, since there are no inboxes here. Filtering the feed to posts
+  mentioning you is the obvious next thing and needs no new storage.
+- **No per-post visibility.** A post's audience is whatever the
+  container's access control says; nothing addresses a post to one
+  person. Doing that properly means writing each post an ACL
+  (`setAgentAccess` abstracts WAC and ACP, and the read path already
+  skips posts it gets a 403 on) — but attachments are separate resources
+  needing the same treatment or the restricted post leaks its own
+  images, listing a container needs read access on the container itself
+  so recipients would still see the *filenames* of posts they can't
+  open, and each post grows an extra round trip on a path that's already
+  latency-bound. `as:bto`/`as:bcc` can't be done honestly at all: they're
+  meant to be stripped during delivery, and there is no delivery step
+  here, only a document people read.
 - **No pagination.** Every post from every contact is loaded on refresh,
   and since each post is its own resource, that's one request per post
   (they run in parallel, but the round trips add up). Fine for

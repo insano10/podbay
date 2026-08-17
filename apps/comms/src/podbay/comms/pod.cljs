@@ -331,14 +331,40 @@
 ;; ---------------------------------------------------------------------------
 ;; Posts
 
-(defn- thing->post [thing]
+(defn- mentions-of
+  "The as:Mention things a post tags, as {:webid :label}.
+
+   Each tag is a separate subject in the same document, so resolving one
+   is a local lookup rather than a fetch. A tag we can't resolve, or one
+   missing either half, is dropped: a mention with no WebID can't be
+   linked and one with no text can't be found in the content, so neither
+   is renderable."
+  [ds thing]
+  (->> (array-seq (sc/getUrlAll thing v/as-tag))
+       (keep (fn [url]
+               (when-let [tag (sc/getThing ds url)]
+                 (let [webid (sc/getUrl tag v/as-href)
+                       label (sc/getStringNoLocale tag v/as-name)]
+                   (when (and webid (seq label))
+                     {:webid webid :label label})))))
+       vec))
+
+(defn- thing->post [ds thing]
   (when (some #(= % v/as-Note) (array-seq (sc/getUrlAll thing sv/rdf-type)))
     {:id (sc/asUrl thing)
      :author (sc/getUrl thing v/as-attributedTo)
      :content (sc/getStringNoLocale thing v/as-content)
      :published (sc/getDatetime thing v/as-published)
      :generator (sc/getUrl thing v/as-generator)
+     :mentions (mentions-of ds thing)
      :attachments (vec (array-seq (sc/getUrlAll thing v/as-attachment)))}))
+
+(defn- posts-in-dataset
+  "Every post in one already-fetched document. Takes the dataset rather
+   than mapping over its things, because a post's mentions are other
+   subjects in the same document and can only be resolved against it."
+  [ds]
+  (keep #(thing->post ds %) (array-seq (sc/getThingAll ds))))
 
 (defn- posts-in-container+
   "Every post in one container. One unreadable post is skipped — it
@@ -357,8 +383,7 @@
                                urls))]
     (->> datasets
          (remove nil?)
-         (mapcat #(array-seq (sc/getThingAll %)))
-         (keep thing->post)
+         (mapcat posts-in-dataset)
          ;; remember where it came from: with several registered sources
          ;; merged into one feed, "which container is this from?" stops
          ;; being obvious from the post itself
@@ -369,8 +394,7 @@
    registration — which names a document rather than a container."
   [url]
   (p/let [ds (sc/getSolidDataset url (fresh-opts))]
-    (->> (array-seq (sc/getThingAll ds))
-         (keep thing->post)
+    (->> (posts-in-dataset ds)
          (map #(assoc % :source url)))))
 
 (defn load-posts+
@@ -467,16 +491,40 @@
    the post rather than being inferred from where it sits. Omitted when
    the build has no published identity, since a dynamically registered
    client is a different throwaway on every login and naming one would
-   be worse than saying nothing."
-  [webid content published media-urls]
-  (reduce (fn [thing url] (sc/addUrl thing v/as-attachment url))
-          (cond-> (-> (sc/createThing #js {:name "post"})
-                      (sc/addUrl sv/rdf-type v/as-Note)
-                      (sc/addStringNoLocale v/as-content content)
-                      (sc/addDatetime v/as-published published)
-                      (sc/addUrl v/as-attributedTo webid))
-            (seq auth/client-id) (sc/addUrl v/as-generator auth/client-id))
-          media-urls))
+   be worse than saying nothing.
+
+   `mentions` are the as:Mention Things themselves, not their URLs.
+   addUrl accepts a Thing, and while both are still local nodes the
+   reference stays local too — so on save it serialises as <#mention-0>
+   rather than the document's own address. That keeps the document
+   location-independent: move it, or the container it sits in, and the
+   tags still resolve. An absolute reference would go on naming where
+   the post used to be, and mentions-of would quietly find nothing."
+  [webid content published media-urls mentions]
+  (as-> (-> (sc/createThing #js {:name "post"})
+            (sc/addUrl sv/rdf-type v/as-Note)
+            (sc/addStringNoLocale v/as-content content)
+            (sc/addDatetime v/as-published published)
+            (sc/addUrl v/as-attributedTo webid)) thing
+    (cond-> thing
+      (seq auth/client-id) (sc/addUrl v/as-generator auth/client-id))
+    (reduce #(sc/addUrl %1 v/as-attachment %2) thing media-urls)
+    (reduce #(sc/addUrl %1 v/as-tag %2) thing mentions)))
+
+(defn- mention-thing
+  "One as:Mention: who was mentioned, and the text that mentions them.
+
+   Both halves are needed. The href is the only durable identifier — a
+   display name can change, and is anyway just what the author's app
+   happened to call them — while the name is what lets a reader find the
+   mention in the content and highlight it in place. An app that ignores
+   tags entirely still shows '@Alice' as ordinary text, which is the
+   point of storing the literal rather than an offset."
+  [i {:keys [webid label]}]
+  (-> (sc/createThing #js {:name (str "mention-" i)})
+      (sc/addUrl sv/rdf-type v/as-Mention)
+      (sc/addUrl v/as-href webid)
+      (sc/addStringNoLocale v/as-name label)))
 
 (defn- register-posts-container!+
   "Advertise `container` as this person's home for as:Note in their
@@ -521,8 +569,13 @@
   "Upload any media files, then save the post as a new Turtle resource
    named by its timestamp. Resolves when the post is stored.
 
-   `container` names where it goes; nil falls back to write-container+."
-  [webid content files container]
+   `container` names where it goes; nil falls back to write-container+.
+   `mentions` is {:webid :label} for each person named in the text, and
+   may be empty.
+
+   The post and its mentions are separate subjects in one document, so
+   this is still a single request no matter how many people are named."
+  [webid content files container mentions]
   (p/let [posts-url (as-container (or container (write-container+ webid)))
           media-url (media-container posts-url)
           _ (ensure-container+ posts-url)
@@ -530,9 +583,17 @@
           media-urls (p/all (map #(upload-file+ media-url %) files))
           now (js/Date.)
           slug (str/replace (.toISOString now) #"[:.]" "-")
-          ds (sc/setThing (sc/createSolidDataset)
-                          (post-thing webid content now media-urls))
-          saved (sc/saveSolidDatasetAt (str posts-url slug ".ttl") ds (opts))]
+          doc-url (str posts-url slug ".ttl")
+          ;; built before the post so it can reference them directly;
+          ;; they stay local nodes until save, which is what makes the
+          ;; tags come out relative
+          mention-things (map-indexed mention-thing mentions)
+          ds (reduce sc/setThing
+                     (sc/setThing (sc/createSolidDataset)
+                                  (post-thing webid content now media-urls
+                                              mention-things))
+                     mention-things)
+          saved (sc/saveSolidDatasetAt doc-url ds (opts))]
     ;; publish where these posts live, once the container definitely exists
     (register-posts-container!+ webid posts-url)
     saved))
