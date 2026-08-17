@@ -650,6 +650,33 @@ empty value:
 | `contacts.ttl` | you follow nobody yet | rejects |
 | someone's posts | — | rejects, recorded per author |
 
+That same distinction matters when *writing* `contacts.ttl`, for a
+reason worth knowing before using `saveSolidDatasetAt` anywhere else.
+It decides between creating and updating by asking whether the dataset
+it was handed came back from the server:
+
+```js
+isUpdate = hasChangelog && hasResourceInfo && …
+prepareSolidDatasetCreation → headers: { "If-None-Match": "*" }
+```
+
+A freshly built dataset therefore takes the **creation** path, which
+says "only if this doesn't exist yet" — and that succeeds exactly once.
+`save-contacts+` used to build its dataset from scratch every time, so
+the first person you followed created the file and every change after
+that came back **412 Precondition Failed**. The first thing you tried
+to unfollow could never be removed.
+
+So it now fetches the document first and edits that. Two consequences.
+The write becomes a real update — solid-client sends a SPARQL patch
+rather than a whole document, so it also stops clobbering anything else
+in the file. And the old `#me` is *removed* before the new one is set:
+this is an overwrite, and merely adding to what's there would make
+unfollowing impossible, since `as:following` values would only ever
+accumulate. A read failure that isn't a 404 propagates rather than
+falling back to a create, which would overwrite a document we simply
+failed to read.
+
 `state/fetch-authors!` catches per author, so one unreachable contact
 still can't break the whole feed — but it records *why* in `:unreadable`
 and the feed shows it, rather than rendering as though that person had

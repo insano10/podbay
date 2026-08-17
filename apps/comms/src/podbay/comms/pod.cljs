@@ -622,11 +622,32 @@
                  (if (missing? e) [] (p/rejected e))))))
 
 (defn save-contacts+
-  "Overwrite the contacts resource with the given list of WebIDs."
+  "Overwrite the contacts resource with the given list of WebIDs.
+
+   The existing document is fetched first, and not merely out of
+   politeness. saveSolidDatasetAt decides between creating and updating
+   by asking whether the dataset it was handed came from the server: a
+   freshly built one takes the creation path, which sends
+   `If-None-Match: *` — 'only if this doesn't exist yet'. That succeeds
+   exactly once. Every write after the first is then refused with a 412,
+   so the very first person you unfollowed could never be removed.
+
+   The old #me is dropped rather than amended, because this is an
+   overwrite: adding to what's there would make unfollowing impossible,
+   since as:following values would only ever accumulate. The
+   replacement is built as a local node so it still serialises as
+   <#me>."
   [webid contact-webids]
   (p/let [url (contacts-url+ webid)
+          existing (-> (sc/getSolidDataset url (fresh-opts))
+                       ;; no document yet is the normal state before you
+                       ;; follow anyone; anything else is a real failure
+                       ;; and must not be papered over with a create
+                       (p/catch (fn [e] (if (missing? e) nil (p/rejected e)))))
           thing (reduce (fn [t c] (sc/addUrl t v/as-following c))
                         (sc/createThing #js {:name "me"})
                         contact-webids)
-          ds (sc/setThing (sc/createSolidDataset) thing)]
+          ds (-> (or existing (sc/createSolidDataset))
+                 (cond-> existing (sc/removeThing (str url "#me")))
+                 (sc/setThing thing))]
     (sc/saveSolidDatasetAt url ds (opts))))
