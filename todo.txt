@@ -1,10 +1,13 @@
-- make adding connection work in feed
+- make adding connection work in feed <- in progress, see following.md for design plan
  - ensure it is obvious for a first time user what steps to follow
     - how do you easily enter a webId
     - how do you easily grant access to your posts folder?
     - can we use an inbox message the user can click from within airlock to do the correct thing?
     - same for removing follower and revoking access
- - can we do groups with permissions? seems extreme to list all friends on a container
+ - can you write a post for multiple audiences?
+    - yes but you need to duplicate the post into each audience container and ensure you delete all of them
+    - given the frequency at which this would be done, it's fine for now
+    - posts are made to audiences, these do not overlap
  - create some test pods with better test data
     - any more providers to include?
 - make it obvious which pod you are connected to on comms
@@ -13,6 +16,7 @@
 - add better styling
  - airlock back breadcrumb and make info panel icon more obvious
  - rename comms to so.fee?
+- can we do groups with permissions? seems extreme to list all friends on a container
 - make 502 handling better (error message too vague, spinners and more retries)
 - accessibility features
 - pod hygiene app

@@ -40,7 +40,15 @@ shared/
   src/         auth + generic RDF vocabulary (podbay.shared.*)
 site/
   index.html   landing page linking the two
+test/
+  podbay/…     the pure parts, run by `npm test`
+docs/
+  following.md design note for the follow handshake — not built yet
 ```
+
+This README describes what exists. `docs/` is for designs that don't
+yet, where the reasoning is worth keeping and would be expensive to
+reconstruct.
 
 Each app's `public/` holds its own `index.html`, `css/`, `icon.svg` and
 client identifier documents; its `js/` is build output and gitignored.
@@ -1186,6 +1194,15 @@ keeping applied consistently.
   that — open the container, ⓘ, grant their WebID read. Comms now at
   least *says* who will be able to read what you're writing (see below),
   but publishing and sharing remain two separate acts.
+
+  This is the single biggest piece of friction in the whole suite:
+  following someone requires the other person to use a different app
+  and understand access control, with nothing telling them you asked.
+  [docs/following.md](docs/following.md) is a design for fixing it —
+  audience containers with opaque names, a manifest of what Comms may
+  grant on, and `as:Follow`/`as:Accept` over `ldp:inbox` — including
+  why an app writing access control is acceptable when it's bounded,
+  and where it stops being so. Not built.
 - **Mentions don't notify, and there's no "mentions of me" view.** The
   data supports both — `as:tag` is queryable and the WebID is exact —
   but a mention only reaches someone if they already follow you and
