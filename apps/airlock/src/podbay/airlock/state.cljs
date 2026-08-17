@@ -35,16 +35,43 @@
            :move-busy? false
            :error nil}))
 
+(defn- blocked?
+  "Did this fail before any answer we're allowed to read?
+
+   A fetch the browser refuses to expose rejects with a bare TypeError
+   and no status — there is deliberately no way to tell *why* from
+   script, since that would leak what the response said. A dropped
+   connection looks identical. So this identifies the shape of the
+   failure, not its cause."
+  [^js err]
+  (and (nil? (some-> err .-statusCode))
+       (nil? (some-> err .-status))
+       (= "TypeError" (some-> err .-name))))
+
 (defn- describe
   "A fetch that never reaches the server rejects with a bare
    TypeError: 'Failed to fetch', which says nothing about why. Keep the
    error's type alongside its message, and put the whole object in the
-   console where its stack and cause are inspectable."
+   console where its stack and cause are inspectable.
+
+   For that case the message says what can be established and offers the
+   test that settles it, rather than naming a cause. Opening the URL in a
+   tab is the discriminator: loading there but not here means the
+   response carried no CORS headers — something other than the pod
+   answered, a CDN intercepting the path being the usual reason — while
+   failing in both means the resource or the network is the problem."
   [context ^js err]
   (js/console.error context err)
-  (str context ": "
-       (when-let [n (some-> err .-name)] (str n " — "))
-       (or (some-> err .-message) (str err))))
+  (if (blocked? err)
+    (str context ": the browser wouldn't let this app read the response, so "
+         "there is nothing to show. Either the answer carried no CORS "
+         "headers — which happens when something other than the pod "
+         "answers, such as a CDN serving that path itself — or the "
+         "request never completed. Opening the URL in a new tab tells "
+         "you which: if it loads there, it's the former.")
+    (str context ": "
+         (when-let [n (some-> err .-name)] (str n " — "))
+         (or (some-> err .-message) (str err)))))
 
 (defn- set-error! [msg]
   (swap! db assoc :error msg :loading? false))

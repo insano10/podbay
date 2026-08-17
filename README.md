@@ -713,6 +713,37 @@ Every pod request in both apps goes through it, so this is also the most
 likely reason the third-party pod browsers feel unreliable: they surface
 the blip rather than absorbing it.
 
+When retries are exhausted and the rejection stands, Airlock says
+something more useful than the TypeError. `state/blocked?` spots the
+shape — no status at all, because a response the browser won't expose
+deliberately tells script nothing about itself — and the message names
+the two possibilities rather than picking one: the answer carried no
+CORS headers, or the request never completed. It then offers the test
+that settles it, which is **opening the URL in a new tab**. Loading
+there but not here means CORS.
+
+A worked example, from a pod root. `robots.txt` on solidcommunity.net
+can't be opened in any browser-based app, while its `.acl` and `.meta`
+open fine. Cloudflare serves that one path itself:
+
+| | `/robots.txt` | `/profile/card` |
+|---|---|---|
+| `x-powered-by` | absent | `Community Solid Server` |
+| `access-control-allow-origin` | absent | echoes the Origin |
+| `content-length` | 1922 | — |
+
+The pod's own file is 86 bytes; what comes back is Cloudflare's managed
+robots.txt with the pod's appended to it. The request never reaches the
+server, so no CORS headers, so the browser withholds the response —
+nothing to do with the pod's access rules, which grant everyone read.
+`/robots.txt.acl` and `/robots.txt.meta` are different paths and aren't
+intercepted, which is the tell.
+
+Worth being clear that **CORS is not access control**. It governs
+whether a page on one origin may read a response using the visitor's
+browser; it says nothing about who may fetch the resource. Anything
+`curl` can read, anyone can read.
+
 ### Reading pods you have no account with
 
 Solid's whole premise is that you read other people's pods, on servers
