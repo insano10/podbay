@@ -181,6 +181,23 @@ input, textarea {
 
 .file-count { font-size: 0.85rem; color: var(--text-muted); }
 
+/* -------------------------------------------------------------- audiences */
+
+/* Same shape as the contacts panel below — both are lists of things you
+   manage, and looking alike is the point. */
+.audiences {
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: 0.75rem;
+  padding: 0.75rem 1rem;
+  margin-bottom: 1rem;
+}
+.audiences summary { cursor: pointer; font-weight: 500; }
+.audiences .hint { margin: 0.5rem 0; }
+.adopt { margin-top: 0.75rem; border-top: 1px solid var(--border); padding-top: 0.5rem; }
+.adopt-name { display: flex; gap: 0.35rem; align-items: center; }
+.adopt-name input { width: 9rem; }
+
 /* --------------------------------------------------------------- contacts */
 
 .contacts {

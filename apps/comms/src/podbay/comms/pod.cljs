@@ -208,12 +208,42 @@
   (reset! alt-profiles-cache {})
   (reset! type-index-cache {}))
 
+;; The manifest is defined further down, next to the rest of the audience
+;; handling; reading posts needs it here.
+(declare load-audiences+)
+
+(defn- own-audience-containers+
+  "Your own audiences, as sources to read posts from.
+
+   A private audience is deliberately absent from the public type index
+   — that's what stops the world learning it exists. But discovery has
+   to work for *you* too, and nothing else would find it: your own feed
+   would silently omit everything you posted there.
+
+   Only for yourself. Someone else's manifest is private to them, so
+   asking for it would cost a request per contact and be refused every
+   time; their private audiences reach you through the grant instead.
+
+   Best-effort — a manifest that can't be read must not take the whole
+   feed with it, since the registered containers still have posts in."
+  [webid]
+  (if (= webid (auth/web-id))
+    (-> (p/let [audiences (load-audiences+ webid)]
+          (mapv :container audiences))
+        (p/catch (fn [e]
+                   (js/console.warn "Couldn't read your audiences" e)
+                   [])))
+    []))
+
 (defn- post-sources+
   "Everywhere to read this person's posts from — every registered
-   container and document — falling back to our own convention only when
-   their pod registers nothing at all."
+   container and document, plus your own audiences — falling back to our
+   own convention only when nothing at all turns up."
   [webid]
-  (p/let [{:keys [containers instances]} (registrations+ webid v/as-Note)]
+  (p/let [{:keys [containers instances]} (registrations+ webid v/as-Note)
+          mine (own-audience-containers+ webid)
+          ;; an adopted container is both registered and an audience
+          containers (vec (distinct (concat containers mine)))]
     (if (or (seq containers) (seq instances))
       {:containers containers :instances instances}
       (p/let [root (pod-root+ webid)]
@@ -576,7 +606,11 @@
    The post and its mentions are separate subjects in one document, so
    this is still a single request no matter how many people are named."
   [webid content files container mentions]
-  (p/let [posts-url (as-container (or container (write-container+ webid)))
+  ;; resolved in its own binding: p/let awaits a binding's *value*, so
+  ;; as-container applied to write-container+ directly would receive the
+  ;; promise itself and stringify it into the URL
+  (p/let [chosen (or container (write-container+ webid))
+          posts-url (as-container chosen)
           media-url (media-container posts-url)
           _ (ensure-container+ posts-url)
           _ (when (seq files) (ensure-container+ media-url))
@@ -620,6 +654,158 @@
       ;; anyone. Any other failure must not silently unfollow everyone.
       (p/catch (fn [e]
                  (if (missing? e) [] (p/rejected e))))))
+
+(defn- audiences-url+ [webid]
+  (p/let [root (pod-root+ webid)]
+    (str root app-path "audiences.ttl")))
+
+;; ---------------------------------------------------------------------------
+;; Audiences
+;;
+;; A container per audience, created by this app, with what the user
+;; calls it recorded here rather than in the container's name.
+;;
+;; The name is deliberately opaque. A follower is told the URL of the
+;; container they've been granted, so a container called `acquaintances`
+;; tells them what you think of them; and the names together publish the
+;; shape of someone's relationships to anyone who can list the parent.
+;;
+;; This manifest is also what makes "Comms may only grant access on
+;; containers it created" checkable rather than guessed. A naming
+;; convention would do neither: names are user-visible and can be
+;; renamed in a file browser, at which point a convention silently
+;; starts pointing at the wrong thing.
+
+(defn short-container-name
+  "A container as a short, recognisable path — the last couple of
+   segments. All that can be said about a container this app didn't
+   create and has no label for."
+  [url]
+  (try
+    (->> (str/split (.-pathname (js/URL. url)) #"/")
+         (remove str/blank?)
+         (take-last 2)
+         (str/join "/"))
+    (catch :default _ url)))
+
+(defn audience-parent
+  "The container an audience sits in — this app's own posts container.
+   Not somewhere to file another audience."
+  [container]
+  (let [trimmed (cond-> container
+                  (str/ends-with? container "/") (subs 0 (dec (count container))))
+        cut (str/last-index-of trimmed "/")]
+    (when cut (subs trimmed 0 (inc cut)))))
+
+(defn- audience-slug
+  "An opaque container name. Short enough to read back in a URL, random
+   enough that two audiences created in the same second don't collide."
+  []
+  (subs (str (random-uuid)) 0 8))
+
+(defn- thing->audience [thing]
+  (when-let [container (sc/getUrl thing v/solid-instanceContainer)]
+    {:id (last (str/split (sc/asUrl thing) #"#"))
+     :label (or (sc/getStringNoLocale thing v/dcterms-title) "Untitled")
+     :container container}))
+
+(defn load-audiences+
+  "The audiences this person has, in the order they were created.
+   Empty when none exist yet, which is the normal state before the
+   first one is made."
+  [webid]
+  (-> (p/let [url (audiences-url+ webid)
+              ;; rewritten whenever an audience is added or renamed, so
+              ;; never serve this from cache
+              ds (sc/getSolidDataset url (fresh-opts))]
+        (->> (array-seq (sc/getThingAll ds))
+             (keep thing->audience)
+             vec))
+      ;; no manifest yet is the normal state. Any other failure must not
+      ;; masquerade as "you have no audiences", which would invite
+      ;; creating duplicates of the ones already there.
+      (p/catch (fn [e]
+                 (if (missing? e) [] (p/rejected e))))))
+
+(defn- save-audiences+
+  "Overwrite the manifest with this list.
+
+   Fetches first, for the reason save-contacts+ does: a dataset built
+   from scratch takes saveSolidDatasetAt's *creation* path, which sends
+   If-None-Match and so succeeds exactly once. Existing audiences are
+   removed rather than amended, since this is a replacement — otherwise
+   renaming one would leave both names behind."
+  [webid audiences]
+  (p/let [url (audiences-url+ webid)
+          existing (-> (sc/getSolidDataset url (fresh-opts))
+                       (p/catch (fn [e] (if (missing? e) nil (p/rejected e)))))
+          base (or existing (sc/createSolidDataset))
+          cleared (reduce (fn [ds thing]
+                            (if (sc/getUrl thing v/solid-instanceContainer)
+                              (sc/removeThing ds thing)
+                              ds))
+                          base
+                          (array-seq (sc/getThingAll base)))
+          ds (reduce (fn [ds {:keys [id label container]}]
+                       (sc/setThing ds (-> (sc/createThing #js {:name id})
+                                           (sc/addStringNoLocale v/dcterms-title label)
+                                           (sc/addUrl v/solid-instanceContainer container))))
+                     cleared
+                     audiences)]
+    (sc/saveSolidDatasetAt url ds (opts))
+    audiences))
+
+(defn create-audience+
+  "Make a new audience: a container under this app's own path, plus its
+   entry in the manifest.
+
+   **Not** beneath a registered posts container, which an earlier
+   version did. A registered container may already be shared — that is
+   the whole point of an audience — and access inherits downwards, so a
+   new audience created inside one is born readable by whoever could
+   read its parent. A brand-new audience must start private, and the
+   only place this app can be sure of that is a container it owns
+   beneath the storage root, whose access is the pod's default.
+
+   The type index is what makes an audience discoverable, not where it
+   sits, so nothing is lost by not nesting it near the older posts."
+  [webid label]
+  (p/let [root (pod-root+ webid)
+          parent (str root app-path "posts/")
+          _ (ensure-container+ parent)
+          slug (audience-slug)
+          container (str parent slug "/")
+          _ (ensure-container+ container)
+          existing (load-audiences+ webid)]
+    (save-audiences+ webid
+                     (conj (vec existing)
+                           {:id slug :label label :container container}))))
+
+(defn adopt-audience+
+  "Record a container that already exists as an audience.
+
+   For a posts container that predates this app. Deliberately explicit:
+   adopting says 'Comms may grant access on this', which is not
+   something to assume about a container someone else's app may also be
+   writing to."
+  [webid label container]
+  (p/let [existing (load-audiences+ webid)]
+    (if (some #(= container (:container %)) existing)
+      existing
+      (save-audiences+ webid
+                       (conj (vec existing)
+                             {:id (audience-slug)
+                              :label label
+                              :container (as-container container)})))))
+
+(defn forget-audience+
+  "Drop an audience from the manifest. Leaves the container and its
+   posts alone — this says 'Comms no longer manages this', not 'delete
+   my posts'. Removing the container itself is a file-browser job, where
+   it is obvious what is being destroyed."
+  [webid container]
+  (p/let [existing (load-audiences+ webid)]
+    (save-audiences+ webid (vec (remove #(= container (:container %)) existing)))))
 
 (defn save-contacts+
   "Overwrite the contacts resource with the given list of WebIDs.

@@ -37,6 +37,16 @@
 (def solid-instanceContainer (str solid "instanceContainer"))
 (def solid-instance (str solid "instance"))
 
+(def ^:private dcterms "http://purl.org/dc/terms/")
+
+;; The audience manifest names each container Comms created and what the
+;; user calls it. No invented vocabulary: dcterms:title is exactly a
+;; human label, and solid:instanceContainer already means "the container
+;; holding these". Anything in that document carrying an
+;; instanceContainer is an audience — the document's own path says what
+;; kind of thing it holds, so the subjects need no type of their own.
+(def dcterms-title (str dcterms "title"))
+
 (def foaf-name (str foaf "name"))
 (def foaf-img (str foaf "img"))
 (def vcard-fn (str vcard "fn"))

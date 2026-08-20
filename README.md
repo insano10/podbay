@@ -43,7 +43,7 @@ site/
 test/
   podbay/…     the pure parts, run by `npm test`
 docs/
-  following.md design note for the follow handshake — not built yet
+  following.md design note for the follow handshake — step 1 built
 ```
 
 This README describes what exists. `docs/` is for designs that don't
@@ -892,6 +892,75 @@ and the WebID document itself is served by their identity service rather
 than the pod — so the linked profile is the *only* document its owner
 can write. Without following `rdfs:seeAlso`, an ESS pod simply cannot
 publish anything discoverable.
+
+### Audiences
+
+Posts go into a container Comms created, not straight into whatever the
+type index registers. Those containers live under the app's own path
+(`podbay/comms/posts/<slug>/`) rather than inside a registered posts
+container — a registered container may already be shared, which is the
+point of an audience, and access inherits downwards, so an audience
+created inside one would be born readable by whoever could read its
+parent. A container is the unit access control inherits
+through, so one container per audience means the reach of a grant is
+exactly "the posts filed under this audience" — rather than "everything
+any app ever filed as an `as:Note`", which is what granting on a
+registered container would mean.
+
+Container names are **opaque** — `social/posts/a7f3c9/`, not
+`social/posts/acquaintances/`. The label lives in a manifest at
+`podbay/comms/audiences.ttl`:
+
+```turtle
+<#a7f3c9> dcterms:title "Friends" ;
+    solid:instanceContainer <https://pod.example/social/posts/a7f3c9/> .
+```
+
+Two reasons for that split. A follower is eventually told the URL of
+the container they've been granted, and shouldn't learn they were filed
+under "Acquaintances". And the names together publish the shape of
+someone's relationships to anyone who can list the parent.
+
+No invented vocabulary: `dcterms:title` is exactly a human label, and
+`solid:instanceContainer` already means "the container holding these".
+Anything in that document carrying an `instanceContainer` is an
+audience — the document's path says what it holds, so the subjects need
+no type of their own.
+
+**A manifest rather than a naming convention**, because it makes
+"containers Comms created" *checkable* rather than guessed. Names are
+user-visible and can be renamed in Airlock, at which point a convention
+silently starts pointing at the wrong thing. The manifest is also what
+will decide, later, which containers Comms may change access on.
+
+A container that predates Comms can be **adopted** — an explicit act,
+since it may hold data another app wrote. Until any audience exists the
+composer falls back to whatever the pod registers for `as:Note`, so
+this is additive: nothing changes for a pod that has never used it.
+
+Writing the manifest fetches it first, for the reason described under
+[Absent vs unreadable](#absent-vs-unreadable) — a dataset built from
+scratch takes `saveSolidDatasetAt`'s creation path and succeeds exactly
+once. Existing entries are removed rather than amended, so renaming an
+audience doesn't leave both names behind.
+
+An audience isn't registered in the public type index — that index is
+world-readable, and the container names together would publish the
+shape of someone's relationships. But type-index discovery is how Comms
+finds posts for *everyone*, including you, so `post-sources+` reads the
+manifest as a source when loading **your own** posts. Without that, a
+post to a new audience vanishes from its author's own feed.
+
+Only your own: someone else's manifest is private to them, so asking
+would cost a request per contact and be refused every time.
+`solid:privateTypeIndex` would be the standard answer and would make
+private audiences visible to other Solid apps too, but it isn't
+universal — solidcommunity.net advertises one, ESS doesn't.
+
+This is the first step of [docs/following.md](docs/following.md). The
+grant panel isn't written yet, nor the per-follower `shared-with/`
+documents that let someone discover what they've been granted — those
+two belong together, since a grant nobody can find does nothing.
 
 ### Which app wrote a post
 

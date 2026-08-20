@@ -2,7 +2,8 @@
   "A single Reagent atom holds all app state; the functions below are
    the only things that change it. No re-frame — for an app this size a
    plain atom keeps the moving parts visible."
-  (:require [promesa.core :as p]
+  (:require [clojure.string :as str]
+            [promesa.core :as p]
             [reagent.core :as r]
             [podbay.shared.auth :as auth]
             [podbay.comms.mentions :as mentions]
@@ -20,6 +21,9 @@
            :destination nil      ; the one chosen for the next post
            :destination-access nil ; who can read it
            :destinations-status nil ; :loading | :ready | :failed
+           :audiences []         ; {:id :label :container}, this app's own
+           :registered []        ; containers the pod registers for as:Note
+           :audience-busy? false
            :apps {}              ; client id url -> the app's own name
            :loading-feed? false
            :posting? false
@@ -174,15 +178,33 @@
   (swap! db assoc :destination url)
   (load-destination-access! url))
 
+(defn audience-label
+  "What to call a container in the composer. An audience the user named,
+   or failing that the tail of its path — which is all we can say about
+   a container this app didn't create."
+  [container]
+  (or (some #(when (= container (:container %)) (:label %)) (:audiences @db))
+      (pod/short-container-name container)))
+
 (defn load-destinations!
-  "Where this person can post. More than one means their pod registers
-   several containers for as:Note — different audiences, typically.
+  "Where this person can post.
+
+   Audiences come first when there are any: they're containers this app
+   created and can describe, so the composer can offer 'Friends' rather
+   than a path. Otherwise it falls back to whatever the pod registers
+   for as:Note, which is what happens before the first audience exists.
 
    A failure here used to render nothing at all, which reads as 'no
    destination exists' rather than 'we couldn't find out'."
   [webid]
   (swap! db assoc :destinations-status :loading)
-  (-> (pod/post-containers+ webid)
+  (-> (p/let [audiences (pod/load-audiences+ webid)
+                  registered (pod/post-containers+ webid)]
+            ;; both are kept: audiences are where posts go, but the
+            ;; registered containers stay visible so the ones this app
+            ;; doesn't manage can still be offered for adoption
+            (swap! db assoc :audiences audiences :registered registered)
+            (if (seq audiences) (mapv :container audiences) registered))
       (p/then (fn [containers]
                 (swap! db assoc :destinations containers :destinations-status :ready)
                 ;; keep whatever was chosen if it's still on offer, so a
@@ -234,6 +256,84 @@
 
 (defn remove-contact! [webid]
   (save-contacts! (vec (remove #{webid} (:contacts @db)))))
+
+(defn adoptable
+  "Registered containers this app doesn't yet manage.
+
+   Computed from the *registered* list rather than from the destinations
+   on offer, because once any audience exists the destinations are the
+   audiences — so deriving it from those would hide adoption exactly
+   when it becomes useful.
+
+   The audiences' own parent is excluded. Where a pod registers nothing,
+   post-containers+ falls back to that very container, and adopting it
+   would put every future audience inside an adopted one — the nesting
+   this design exists to avoid."
+  []
+  (let [{:keys [audiences registered]} @db
+        managed (set (map :container audiences))
+        parents (set (map pod/audience-parent (map :container audiences)))]
+    (->> registered
+         (remove managed)
+         (remove parents)
+         vec)))
+
+(defn- reload-audiences! [webid]
+  (-> (pod/load-audiences+ webid)
+      (p/then (fn [audiences]
+                (swap! db assoc :audiences audiences :audience-busy? false)
+                (load-destinations! webid)))
+      (p/catch (fn [e]
+                 (swap! db assoc :audience-busy? false)
+                 (set-error! (str "Couldn't read your audiences: " (.-message e)))))))
+
+(defn create-audience!
+  "Make a new audience to post into. The container is created and named
+   opaquely; the label you give it is recorded in this app's own
+   manifest, not in the container's name — a follower is told the URL
+   of what they've been granted, and shouldn't learn what you filed
+   them under."
+  [label]
+  (let [label (str/trim label)
+        webid (:webid @db)]
+    (when (and webid (seq label))
+      (swap! db assoc :audience-busy? true :error nil)
+      (-> (pod/create-audience+ webid label)
+          (p/then (fn [_] (reload-audiences! webid)))
+          (p/catch (fn [e]
+                     (swap! db assoc :audience-busy? false)
+                     (set-error! (str "Couldn't create that audience: "
+                                      (.-message e)))))))))
+
+(defn adopt-audience!
+  "Bring a container that already exists under this app's management,
+   so posts can be filed there and access granted on it. Deliberately a
+   separate act from creating one: it may hold data another app wrote."
+  [label container]
+  (let [label (str/trim label)
+        webid (:webid @db)]
+    (when (and webid (seq label) (seq container))
+      (swap! db assoc :audience-busy? true :error nil)
+      (-> (pod/adopt-audience+ webid label container)
+          (p/then (fn [_] (reload-audiences! webid)))
+          (p/catch (fn [e]
+                     (swap! db assoc :audience-busy? false)
+                     (set-error! (str "Couldn't adopt that container: "
+                                      (.-message e)))))))))
+
+(defn forget-audience!
+  "Stop managing an audience. Leaves the container and everything in it
+   untouched — deleting posts is a file-browser act, where what is being
+   destroyed is visible."
+  [container]
+  (when-let [webid (:webid @db)]
+    (swap! db assoc :audience-busy? true :error nil)
+    (-> (pod/forget-audience+ webid container)
+        (p/then (fn [_] (reload-audiences! webid)))
+        (p/catch (fn [e]
+                   (swap! db assoc :audience-busy? false)
+                   (set-error! (str "Couldn't update your audiences: "
+                                    (.-message e))))))))
 
 (defn login! [issuer]
   (swap! db assoc :error nil)

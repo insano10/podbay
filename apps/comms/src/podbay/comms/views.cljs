@@ -67,17 +67,12 @@
 ;; ---------------------------------------------------------------------------
 ;; Composer
 
-(defn- source-label
+(def ^:private source-label
   "A short, recognisable form of the container a post came from — the
    last couple of path segments, since the origin is already obvious
-   from the author and the full URL is in the tooltip."
-  [url]
-  (try
-    (->> (str/split (.-pathname (js/URL. url)) #"/")
-         (remove str/blank?)
-         (take-last 2)
-         (str/join "/"))
-    (catch :default _ url)))
+   from the author and the full URL is in the tooltip. Lives in pod so
+   state can label a destination without reaching into the views."
+  pod/short-container-name)
 
 (defn- app-name-from-url
   "A name for an app from its client identifier URL alone, for when the
@@ -152,13 +147,13 @@
        ;; always name the destination, even when there's only one — the
        ;; access line beneath it is meaningless without a subject
        (if (> (count destinations) 1)
-         [:label "Posting into "
+         [:label "Posting to "
           [:select {:value destination
                     :on-change #(state/choose-destination! (.. % -target -value))}
            (for [url destinations]
-             ^{:key url} [:option {:value url} (source-label url)])]]
-         [:span "Posting into "
-          [:span.where {:title destination} (source-label destination)]])
+             ^{:key url} [:option {:value url} (state/audience-label url)])]]
+         [:span "Posting to "
+          [:span.where {:title destination} (state/audience-label destination)]])
        [audience-line]]
 
       :else nil)))
@@ -311,6 +306,93 @@
 
 ;; ---------------------------------------------------------------------------
 ;; Contacts
+
+(defn audiences-panel
+  "Manage the containers Comms posts into.
+
+   An audience is a container this app created, with the label kept
+   here rather than in the container's name — see docs/following.md.
+   Until one exists the composer falls back to whatever the pod
+   registers for as:Note, so this panel is additive: nothing breaks
+   before it's used."
+  []
+  (r/with-let [new-label (r/atom "")
+               adopt-label (r/atom "")
+               adopting (r/atom nil)]
+    (let [{:keys [audiences audience-busy?]} @state/db
+          unmanaged (state/adoptable)
+          ;; Dereferenced here rather than inside the `for` below. A
+          ;; lazy seq is realised outside the component's reactive
+          ;; context, so a deref in its body isn't tracked and clicking
+          ;; Adopt would change the atom without redrawing anything.
+          naming @adopting
+          adopt-name @adopt-label]
+      [:details.audiences
+       [:summary "Audiences (" (count audiences) ")"]
+       [:p.hint
+        "Where your posts go. Each one is a separate container, so who
+         can read it is decided per audience rather than all at once."]
+       [:div.contact-add
+        [:input {:type "text"
+                 :placeholder "Friends"
+                 :value @new-label
+                 :disabled audience-busy?
+                 :on-change #(reset! new-label (.. % -target -value))
+                 :on-key-down #(when (= "Enter" (.-key %))
+                                 (state/create-audience! @new-label)
+                                 (reset! new-label ""))}]
+        [:button {:disabled (or audience-busy? (str/blank? @new-label))
+                  :on-click (fn []
+                              (state/create-audience! @new-label)
+                              (reset! new-label ""))}
+         (if audience-busy? "Working…" "Create")]]
+
+       (when (seq audiences)
+         [:ul.contact-list
+          (for [{:keys [label container]} audiences]
+            ^{:key container}
+            [:li
+             [:span {:title container} label]
+             [:button.subtle {:disabled audience-busy?
+                              :on-click #(state/forget-audience! container)
+                              :title (str "Stop managing " label
+                                          " — the container and its posts stay")}
+              "✕"]])])
+
+       (when (seq unmanaged)
+         [:div.adopt
+          [:p.hint
+           "Your pod registers "
+           (if (= 1 (count unmanaged)) "a container" "containers")
+           " Comms didn't create. Posts only go to audiences, so adopt
+            one to keep posting there and to share it as an audience —
+            worth knowing another app may also write to it."]
+          [:ul.contact-list
+           (for [url unmanaged]
+             ^{:key url}
+             [:li
+              [:span {:title url} (source-label url)]
+              (if (= url naming)
+                [:span.adopt-name
+                 [:input {:type "text"
+                          :placeholder "Name it"
+                          :auto-focus true
+                          :value adopt-name
+                          :on-change #(reset! adopt-label (.. % -target -value))
+                          :on-key-down
+                          #(when (= "Enter" (.-key %))
+                             (state/adopt-audience! adopt-name url)
+                             (reset! adopting nil)
+                             (reset! adopt-label ""))}]
+                 [:button {:disabled (str/blank? adopt-name)
+                           :on-click (fn []
+                                       (state/adopt-audience! adopt-name url)
+                                       (reset! adopting nil)
+                                       (reset! adopt-label ""))}
+                  "Adopt"]]
+                [:button.subtle {:disabled audience-busy?
+                                 :on-click #(reset! adopting url)}
+                 "Adopt"])])]])])))
 
 (defn contacts-panel []
   (r/with-let [new-contact (r/atom "")]
@@ -547,5 +629,6 @@
        [header]
        (when error [:div.error error])
        [composer]
+       [audiences-panel]
        [contacts-panel]
        [feed]])))
