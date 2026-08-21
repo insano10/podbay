@@ -149,6 +149,32 @@ input, textarea {
 .session a { color: var(--text-muted); text-decoration: none; }
 .session a:hover { text-decoration: underline; }
 
+/* ------------------------------------------------------------------- tabs */
+
+/* Posting and reading on one side, deciding who sees what on the other.
+   They shared a screen and it was cluttered — the sharing panels are
+   set up occasionally, not while writing. */
+.tabs {
+  display: flex;
+  gap: 0.25rem;
+  border-bottom: 1px solid var(--border);
+  margin-bottom: 1rem;
+}
+.tabs button {
+  border: none;
+  border-bottom: 2px solid transparent;
+  border-radius: 0;
+  background: none;
+  color: var(--text-muted);
+  padding: 0.5rem 0.9rem;
+  font-weight: 500;
+}
+.tabs button:hover { color: var(--text); }
+.tabs button.active {
+  color: var(--text);
+  border-bottom-color: var(--accent);
+}
+
 /* --------------------------------------------------------------- composer */
 
 .composer {
@@ -277,7 +303,7 @@ input, textarea {
   border-top: 1px solid var(--border);
 }
 
-/* ------------------------------------------------------------------- feed */
+/* --------------------------------------------------------------- timeline */
 
 .post {
   background: var(--surface);

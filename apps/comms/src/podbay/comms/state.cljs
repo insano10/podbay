@@ -10,7 +10,8 @@
             [podbay.comms.pod :as pod]))
 
 (defonce db
-  (r/atom {:checking-session? true
+  (r/atom {:tab :timeline             ; :timeline | :sharing
+           :checking-session? true
            :webid nil
            :contacts []
            :posts []             ; every author's posts, newest first
@@ -30,12 +31,15 @@
            :requests []          ; as:Follow entries sitting in your inbox
            :request-notice nil   ; what happened when you asked to follow
            :apps {}              ; client id url -> the app's own name
-           :loading-feed? false
+           :loading-timeline? false
            :posting? false
            :error nil}))
 
+(defn show-tab! [tab]
+  (swap! db assoc :tab tab))
+
 (defn- set-error! [msg]
-  (swap! db assoc :error msg :posting? false :loading-feed? false))
+  (swap! db assoc :error msg :posting? false :loading-timeline? false))
 
 (defn short-webid
   "Compact display form of a WebID, e.g. alice.solidcommunity.net."
@@ -79,7 +83,7 @@
 
 (declare load-app-names!)
 
-(defn- rebuild-feed! [by-author]
+(defn- rebuild-timeline! [by-author]
   (swap! db assoc
          :posts-by-author by-author
          :posts (vec (sort-by published-at > (mapcat val by-author))))
@@ -101,26 +105,26 @@
             #(swap! db assoc-in [:apps generator] (or % :unnamed)))))
 
 (defn- merge-author-posts!
-  "Replace one author's posts and rebuild the merged feed. Each pod
+  "Replace one author's posts and rebuild the merged timeline. Each pod
    answers at its own pace, so results are shown as they arrive rather
-   than making the whole feed wait on the slowest contact."
+   than making the whole timeline wait on the slowest contact."
   [author posts]
-  (rebuild-feed! (assoc (:posts-by-author @db) author posts)))
+  (rebuild-timeline! (assoc (:posts-by-author @db) author posts)))
 
 ;; A refresh that is still in flight when another starts must not write
 ;; its results over the newer one.
-(defonce ^:private feed-run (atom 0))
+(defonce ^:private timeline-run (atom 0))
 
 (defn- fetch-authors!
-  "Load each author's posts, merging every one into the feed as it
+  "Load each author's posts, merging every one into the timeline as it
    arrives. Results from a superseded refresh are dropped.
 
    A pod that can't be read is recorded against that author rather than
-   breaking the whole feed — but it is recorded, not silently treated as
+   breaking the whole timeline — but it is recorded, not silently treated as
    an empty pod, so a transient failure can't masquerade as 'no posts'."
   [authors]
-  (let [run @feed-run
-        current? #(= run @feed-run)]
+  (let [run @timeline-run
+        current? #(= run @timeline-run)]
     (load-profiles! authors)
     (p/all (mapv (fn [author]
                    (-> (pod/load-posts+ author)
@@ -140,25 +144,25 @@
 (declare load-followers!)
 (declare load-requests!)
 
-(defn refresh-feed!
+(defn refresh-timeline!
   "Reload posts from the user's own pod and every contact's pod,
    merged and sorted newest-first."
   []
   (let [{:keys [webid contacts]} @db
         authors (into [webid] contacts)]
-    (swap! feed-run inc)
-    (swap! db assoc :loading-feed? true :error nil)
+    (swap! timeline-run inc)
+    (swap! db assoc :loading-timeline? true :error nil)
     ;; drop anyone no longer followed before fetching
-    (rebuild-feed! (select-keys (:posts-by-author @db) authors))
+    (rebuild-timeline! (select-keys (:posts-by-author @db) authors))
     ;; where you can post, and who can read it, are as prone to a
-    ;; transient failure as the feed itself — so refresh re-checks them
+    ;; transient failure as the timeline itself — so refresh re-checks them
     (when-let [webid (:webid @db)]
       (load-destinations! webid)
       (load-followers!)
       (load-requests!))
     (-> (fetch-authors! authors)
-        (p/then #(swap! db assoc :loading-feed? false))
-        (p/catch #(set-error! (str "Couldn't load feed: " (.-message %)))))))
+        (p/then #(swap! db assoc :loading-timeline? false))
+        (p/catch #(set-error! (str "Couldn't load your timeline: " (.-message %)))))))
 
 (defn- load-destination-access!
   "Who can read the container a post is about to go into. Choosing where
@@ -236,7 +240,7 @@
 
 (defn submit-post!
   "Publish a post (text plus optional media files) to the user's own
-   pod, then refresh the feed. Calls on-done once the post is saved.
+   pod, then refresh the timeline. Calls on-done once the post is saved.
 
    Mentions are derived from the finished text here rather than tracked
    as it's typed, so what gets written always describes the text as it
@@ -249,7 +253,7 @@
       (p/then (fn [_]
                 (swap! db assoc :posting? false)
                 (on-done)
-                (refresh-feed!)))
+                (refresh-timeline!)))
       (p/catch #(set-error! (str "Couldn't publish post: " (.-message %))))))
 
 (defn- save-contacts!
@@ -258,14 +262,14 @@
 
    Optimistic because a pod can take seconds and the list should feel
    instant — but a failed write used to leave the app showing you
-   following someone the pod has no record of, so the feed had them and
+   following someone the pod has no record of, so the timeline had them and
    a reload didn't. Rolling back keeps what's on screen equal to what
    was stored."
   [contacts]
   (let [previous (:contacts @db)]
     (swap! db assoc :contacts contacts)
     (-> (pod/save-contacts+ (:webid @db) contacts)
-        (p/then (fn [_] (refresh-feed!)))
+        (p/then (fn [_] (refresh-timeline!)))
         (p/catch (fn [e]
                    (swap! db assoc :contacts previous)
                    (set-error! (str "Couldn't save who you follow: "
@@ -474,7 +478,7 @@
 
 (defn init!
   "Run once on page load: finish any pending OIDC redirect, restore the
-   session if there is one, then load contacts and the feed."
+   session if there is one, then load contacts and the timeline."
   []
   (auth/recover-from-url!)
   (-> (auth/handle-redirect!)
@@ -483,23 +487,23 @@
          (swap! db assoc :checking-session? false)
          (when (auth/logged-in?)
            (let [webid (auth/web-id)]
-             (swap! db assoc :webid webid :loading-feed? true :error nil)
-             (swap! feed-run inc)
+             (swap! db assoc :webid webid :loading-timeline? true :error nil)
+             (swap! timeline-run inc)
              (load-destinations! webid)
              ;; and who you've granted access to, and who's asked. Easy
              ;; to miss: this is the *initial* load, which doesn't go
-             ;; through refresh-feed! — so anything that only appears
+             ;; through refresh-timeline! — so anything that only appears
              ;; there is absent until something else happens to refresh.
              (load-followers!)
              (load-requests!)
              ;; Your own posts and your contact list are independent, and
              ;; on a slow pod every round trip is seconds — so start both
-             ;; at once rather than making the feed wait on the contacts
+             ;; at once rather than making the timeline wait on the contacts
              ;; fetch before it asks for anything.
              (-> (p/all [(fetch-authors! [webid])
                          ;; a contact list we couldn't read is reported,
                          ;; never treated as "you follow nobody" — that
-                         ;; would quietly reduce the feed to your own
+                         ;; would quietly reduce the timeline to your own
                          ;; posts and look perfectly normal
                          (-> (p/let [contacts (pod/load-contacts+ webid)]
                                (swap! db assoc :contacts contacts)
@@ -511,8 +515,8 @@
                                  (str "Couldn't load who you follow: "
                                       (.-message e)
                                       " — your own posts are still shown.")))))])
-                 (p/then (fn [_] (swap! db assoc :loading-feed? false)))
-                 (p/catch #(set-error! (str "Couldn't load feed: "
+                 (p/then (fn [_] (swap! db assoc :loading-timeline? false)))
+                 (p/catch #(set-error! (str "Couldn't load your timeline: "
                                             (.-message %)))))))))
       (p/catch (fn [e]
                  (swap! db assoc :checking-session? false)

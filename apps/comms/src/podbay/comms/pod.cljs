@@ -37,7 +37,7 @@
 ;; "the server told us there is nothing" and "we couldn't ask". The first
 ;; is an answer worth acting on — a pod with no type index really has
 ;; none, so fall back to the convention. The second is ignorance, and
-;; guessing past it is how a transient 502 turns into a feed that quietly
+;; guessing past it is how a transient 502 turns into a timeline that quietly
 ;; shows the wrong container, or none at all.
 
 (defn- missing?
@@ -173,7 +173,7 @@
    registrations may name the same class — typically one per app — a
    single registration may list several containers, and solid:instance
    points at an individual document rather than a container. Reading all
-   of them is what lets this feed pick up posts some *other* Solid app
+   of them is what lets this timeline pick up posts some *other* Solid app
    wrote into its own container, which is the point of discovery."
   [webid class-iri]
   (p/let [ds (type-index+ webid)]
@@ -206,7 +206,7 @@
 
    A private audience is deliberately absent from the public type index
    — that's what stops the world learning it exists. But discovery has
-   to work for *you* too, and nothing else would find it: your own feed
+   to work for *you* too, and nothing else would find it: your own timeline
    would silently omit everything you posted there.
 
    Only for yourself. Someone else's manifest is private to them, so
@@ -214,7 +214,7 @@
    time; their private audiences reach you through the grant instead.
 
    Best-effort — a manifest that can't be read must not take the whole
-   feed with it, since the registered containers still have posts in."
+   timeline with it, since the registered containers still have posts in."
   [webid]
   (if (= webid (auth/web-id))
     (-> (p/let [audiences (load-audiences+ webid)]
@@ -277,7 +277,7 @@
    every registered source, but a write has to pick one: the first
    registered container, else the convention. That's the same
    resolution a reader tries first, so a post always lands somewhere
-   its author's own feed will find it."
+   its author's own timeline will find it."
   [webid]
   (p/let [containers (post-containers+ webid)]
     (first containers)))
@@ -407,7 +407,7 @@
 
 (defn- posts-in-container+
   "Every post in one container. One unreadable post is skipped — it
-   shouldn't hide the rest of someone's feed — but it is logged."
+   shouldn't hide the rest of someone's timeline — but it is logged."
   [container]
   (p/let [;; the listing must be current: a post published a moment ago
           ;; has to appear. The posts themselves may be cached.
@@ -424,7 +424,7 @@
          (remove nil?)
          (mapcat posts-in-dataset)
          ;; remember where it came from: with several registered sources
-         ;; merged into one feed, "which container is this from?" stops
+         ;; merged into one timeline, "which container is this from?" stops
          ;; being obvious from the post itself
          (map #(assoc % :source container)))))
 
@@ -442,10 +442,10 @@
 
    Rejects only if **every** source failed. An unreadable pod and an
    empty one are different facts, and conflating them is how a transient
-   502 becomes a silently empty feed. But one unreadable source among
+   502 becomes a silently empty timeline. But one unreadable source among
    several shouldn't blank the rest — another app's container may simply
    be private — so that is logged and the readable ones still count.
-   Keeping one bad contact from breaking the whole feed is the caller's
+   Keeping one bad contact from breaking the whole timeline is the caller's
    job; see state/fetch-authors!."
   [webid]
   (p/let [{:keys [containers instances]} (post-sources+ webid)

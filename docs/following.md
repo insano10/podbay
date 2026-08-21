@@ -158,7 +158,7 @@ You are storing the photo twice.
 
 It needs one addition. Deduplication in `load-posts+` is keyed on
 `:id`, which is the resource URL — so two copies are two URLs and would
-appear as **two posts in the feed**. Each copy therefore needs a
+appear as **two posts in the timeline**. Each copy therefore needs a
 **stable identifier shared across copies** (a `dcterms:identifier`
 carrying a UUID would do), with the URL as the fallback key. An app
 that doesn't understand it shows duplicates: annoying, not broken.
@@ -201,7 +201,7 @@ membership conflates the two.
 **The invariant isn't enforceable anyway.** Comms can only hold that
 rule inside Comms. Airlock can grant anyone read on any container —
 that is its purpose — so one manual grant puts a follower in two
-audiences without anybody doing anything wrong. A feed whose
+audiences without anybody doing anything wrong. A timeline whose
 correctness depends on nobody using the file manager is not correct.
 
 So the identifier stays. It costs one triple per post and one changed
@@ -265,17 +265,17 @@ this order:
 
 1. Grant each follower through Comms, which writes their `shared-with`
    document and gives them a discovery path independent of the index.
-2. Check their feed still shows the posts, now arriving through
+2. Check their timeline still shows the posts, now arriving through
    `shared-with` rather than the registration.
 3. Remove the registration.
 
-The other order silently drops those posts from every follower's feed
+The other order silently drops those posts from every follower's timeline
 until step 1 catches up. Comms only ever *adds* registrations, so the
 removal is a hand edit of the type index — a small Turtle change, and
-reversible. The owner's own feed is unaffected throughout, because an
+reversible. The owner's own timeline is unaffected throughout, because an
 adopted container is in the manifest and `post-sources+` reads that.
 
-### The owner's own feed
+### The owner's own timeline
 
 Missed on the first pass, and worth stating because it's the sort of
 thing that looks obvious only afterwards: type-index discovery is how
@@ -453,7 +453,7 @@ Alice follows Bob.
    as:published "2026-01-01T00:00:00Z"^^xsd:dateTime .
 ```
 
-6. Alice's UI shows Bob as *requested*. Her feed already shows any
+6. Alice's UI shows Bob as *requested*. Her timeline already shows any
    **publicly** registered posts of his — partial value immediately, no
    approval needed.
 
@@ -517,8 +517,8 @@ having to tell him some other way. Everything else works without it.
 
 | | Bob has an inbox | Bob doesn't |
 |---|---|---|
-| **Alice has one** | Full flow: request arrives, Bob allows, Alice's UI updates promptly | Alice tells Bob out of band; he allows; her feed picks it up on the next refresh |
-| **Alice doesn't** | Request arrives; Bob allows; Alice's feed picks it up on the next refresh | Fully manual, and still works |
+| **Alice has one** | Full flow: request arrives, Bob allows, Alice's UI updates promptly | Alice tells Bob out of band; he allows; her timeline picks it up on the next refresh |
+| **Alice doesn't** | Request arrives; Bob allows; Alice's timeline picks it up on the next refresh | Fully manual, and still works |
 
 Every cell is usable, which wasn't true before. Discovery no longer
 depends on notification: whatever Bob grants, Alice finds through her

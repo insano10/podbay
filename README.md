@@ -5,7 +5,7 @@ data, in storage you control, read and written straight from the browser.
 
 | App | | |
 |---|---|---|
-| **Comms** | `/comms/` | A social feed assembled from the pods of the people you follow |
+| **Comms** | `/comms/` | A social timeline assembled from the pods of the people you follow |
 | **Airlock** | `/airlock/` | A file browser for any Solid pod — the way in and out |
 
 There is deliberately no backend: these are static sites. Authentication
@@ -21,7 +21,7 @@ Built with [ClojureScript](https://clojurescript.org/),
 
 Write posts (text plus photos and videos) into **your own pod**, follow
 friends by their WebIDs, and see everyone's posts merged into one
-chronological feed. How it finds and stores that data is described under
+chronological timeline. How it finds and stores that data is described under
 [How data is stored](#how-data-is-stored) below; Airlock has its own
 section further down.
 
@@ -32,7 +32,7 @@ imports the other; the only common ground is `podbay.shared.*`.
 
 ```
 apps/
-  comms/       Comms — the feed              (podbay.comms.*)
+  comms/       Comms — the timeline          (podbay.comms.*)
     src/  public/
   airlock/     Airlock — files in a pod      (podbay.airlock.*)
     src/  public/
@@ -75,7 +75,7 @@ This watches **both** apps in this repo:
 
 | URL | App |
 |---|---|
-| <http://localhost:8080> | Comms — the feed |
+| <http://localhost:8080> | Comms — the timeline |
 | <http://localhost:8081> | [Airlock](#airlock) — a file browser for your pod |
 
 They're on **separate ports deliberately**, and it matters: see
@@ -558,7 +558,7 @@ past this point logs everyone out once.
 ### Its own identity
 
 The browser has separate client identifier documents
-(`apps/airlock/public/clientid*.jsonld`) from the feed app's, so the consent screen names what is actually asking for access —
+(`apps/airlock/public/clientid*.jsonld`) from the timeline app's, so the consent screen names what is actually asking for access —
 "Airlock", not "Comms". Same split between published and
 localhost redirect URIs, for the same reason. See
 [Client identity](#client-identity).
@@ -597,7 +597,7 @@ Posts are [ActivityStreams 2.0](https://www.w3.org/TR/activitystreams-vocabulary
     as:attachment <../media/sunset.jpg> .
 ```
 
-The feed is assembled client-side: for each followed WebID the app finds
+The timeline is assembled client-side: for each followed WebID the app finds
 that person's posts container, lists it, fetches each post, and merges
 everything sorted by `as:published`.
 
@@ -629,7 +629,7 @@ Reading all of them matters, because a type index is a *set of hints,
 not an exhaustive statement*. Several registrations may name the same
 class, typically one per app; a single registration may list several
 containers; and `solid:instance` names an individual document rather
-than a container. Merging them is what lets this feed pick up posts a
+than a container. Merging them is what lets this timeline pick up posts a
 **different** Solid app wrote into its own container, which is the whole
 point of discovery. Posts registered in more than one place are
 deduplicated by their URL.
@@ -640,7 +640,7 @@ inherits through — so separate containers are how posts for different
 audiences are kept apart. Left alone, `pod/write-container+` takes the
 first registered container, else the convention: the same source a
 reader tries first, so a post always lands somewhere its author's own
-feed will find it.
+timeline will find it.
 
 **The composer says who can read the chosen container** before anything
 is written — "Only you", "Shared with 2 people", or a warning that
@@ -674,10 +674,10 @@ real on a slow pod (see below), and it's why the index is cached per
 WebID alongside the profile.
 
 Each person's pod answers at its own pace, so posts are merged into the
-feed as they arrive rather than waiting for the slowest contact —
+timeline as they arrive rather than waiting for the slowest contact —
 `state/db` holds `:posts-by-author` and `:posts` is the flattened sort
 of it. A contact whose pod is unreachable contributes `[]` instead of
-breaking the feed.
+breaking the timeline.
 
 ### Absent vs unreadable
 
@@ -686,7 +686,7 @@ server told us there is nothing"** and **"we couldn't ask"**. A 404 is
 an answer worth acting on — a pod that publishes no type index really
 has none, so fall back to the convention. Anything else (401, 403, 502,
 a dropped connection) is ignorance, and guessing past it is how a
-transient blip becomes a feed that silently shows nothing, or reads the
+transient blip becomes a timeline that silently shows nothing, or reads the
 wrong container.
 
 Concretely, a failure now propagates rather than becoming a plausible
@@ -728,8 +728,8 @@ falling back to a create, which would overwrite a document we simply
 failed to read.
 
 `state/fetch-authors!` catches per author, so one unreachable contact
-still can't break the whole feed — but it records *why* in `:unreadable`
-and the feed shows it, rather than rendering as though that person had
+still can't break the whole timeline — but it records *why* in `:unreadable`
+and the timeline shows it, rather than rendering as though that person had
 posted nothing. The "No posts yet" message only appears when nothing
 failed; otherwise it would be a guess presented as a fact.
 
@@ -964,7 +964,7 @@ world-readable, and the container names together would publish the
 shape of someone's relationships. But type-index discovery is how Comms
 finds posts for *everyone*, including you, so `post-sources+` reads the
 manifest as a source when loading **your own** posts. Without that, a
-post to a new audience vanishes from its author's own feed.
+post to a new audience vanishes from its author's own timeline.
 
 Only your own: someone else's manifest is private to them, so asking
 would cost a request per contact and be refused every time.
@@ -981,14 +981,14 @@ two belong together, since a grant nobody can find does nothing.
 
 Posts carry `as:generator` pointing at the client identifier document of
 the app that wrote them, and each post shows a **via** chip naming that
-app. The point is aggregation: a feed assembled from several pods is
-also a feed assembled by several apps, and the chip is what makes that
+app. The point is aggregation: a timeline assembled from several pods is
+also a timeline assembled by several apps, and the chip is what makes that
 visible. Anything with a published identity gets named, not just ours.
 
 The name comes from the `client_name` in the generator's own document —
 apps name themselves, and there's nothing to maintain here as new ones
 appear. Each distinct generator is fetched once per session
-(`state/load-app-names!` claims the entry before the request, so a feed
+(`state/load-app-names!` claims the entry before the request, so a timeline
 of fifty posts from one app still makes one call).
 
 That fetch is a **plain `js/fetch` with `credentials: "omit"`**, not
@@ -1071,7 +1071,7 @@ your contacts stays plain text: a mention has to resolve to a WebID, and
 Solid has no directory to look a stranger up in.
 
 Mentioned people get their profiles fetched like anyone else, since a
-post can mention someone you don't follow and nothing else in the feed
+post can mention someone you don't follow and nothing else in the timeline
 would look them up.
 
 The scanner is pure and lives in `podbay.comms.mentions`, separately
@@ -1094,7 +1094,7 @@ critical path**:
   solid-client's `getPodUrlAll`, which would fetch the profile again
   internally. Type indexes are cached the same way.
 - On startup your own posts and your contact list are requested **in
-  parallel**. They're independent, but serialising them meant the feed
+  parallel**. They're independent, but serialising them meant the timeline
   issued no request at all until the contacts round trip had finished.
 - Media is fetched only as it nears the viewport — see below.
 
@@ -1112,7 +1112,7 @@ read degrades to a plain link rather than a broken image.
 Because nothing else can defer these requests — an authenticated fetch
 can't use `loading="lazy"` — `authed-media` defers them itself, starting
 the fetch only when an `IntersectionObserver` says the placeholder is
-near the viewport. Without that, a feed full of photos downloads every
+near the viewport. Without that, a timeline full of photos downloads every
 attachment at once, competing with the post fetches.
 
 An attachment that can't be fetched says so, with the reason, rather
@@ -1254,7 +1254,7 @@ or ignore it.
 | Namespace             | Role                                                       |
 |-----------------------|------------------------------------------------------------|
 | `podbay.comms.core`   | Entry point: mounts the UI, restores the session           |
-| `podbay.comms.views`  | Reagent components (login, composer, contacts, feed)       |
+| `podbay.comms.views`  | Reagent components (login, composer, contacts, timeline)       |
 | `podbay.comms.state`  | Single app-state atom and the actions that mutate it       |
 | `podbay.comms.pod`    | All pod I/O — wraps `@inrupt/solid-client`, returns cljs data |
 | `podbay.comms.vocab`  | ActivityStreams, FOAF, vCard and type-index terms          |
@@ -1290,7 +1290,7 @@ keeping applied consistently.
 - **Mentions don't notify, and there's no "mentions of me" view.** The
   data supports both — `as:tag` is queryable and the WebID is exact —
   but a mention only reaches someone if they already follow you and
-  refresh, since there are no inboxes here. Filtering the feed to posts
+  refresh, since there are no inboxes here. Filtering the timeline to posts
   mentioning you is the obvious next thing and needs no new storage.
 - **No per-post visibility.** A post's audience is whatever the
   container's access control says; nothing addresses a post to one

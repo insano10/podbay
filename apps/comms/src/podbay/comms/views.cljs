@@ -46,7 +46,7 @@
     [:div.login
      [:h1 "Comms"]
      [:p.tagline
-      "A feed of the people you choose, from data they own. "
+      "A timeline of the people you choose, from data they own. "
       "No server, no ads, no tracking — this page talks directly to Solid pods."]
      [:div.login-box
       [:label {:for "issuer"} "Your Solid identity provider"]
@@ -533,7 +533,7 @@
                               (reset! new-contact ""))}
          "Follow"]]
        (if (empty? contacts)
-         [:p.hint "Paste a friend's WebID above to see their posts in your feed."]
+         [:p.hint "Paste a friend's WebID above to see their posts in your timeline."]
          [:ul.contact-list
           (for [webid contacts]
             ^{:key webid}
@@ -571,7 +571,7 @@
    Fetching is deferred until the placeholder nears the viewport. That
    deliberately reproduces what the browser used to do for us via
    loading=\"lazy\": authenticated media can't be a plain src, so nothing
-   else will hold these requests back, and a feed full of photos would
+   else will hold these requests back, and a timeline full of photos would
    otherwise download all of them at once, ahead of the posts.
 
    The blob: URL is released when the component unmounts."
@@ -700,16 +700,16 @@
           ^{:key webid}
           [:li [:span.who {:title webid} (display-name webid)] " — " reason])]
        [:p.hint
-        "Their posts are missing from the feed rather than absent — try
+        "Their posts are missing from the timeline rather than absent — try
          refreshing."]])))
 
-(defn feed []
-  (let [{:keys [posts loading-feed? unreadable]} @state/db]
-    [:div.feed
+(defn timeline []
+  (let [{:keys [posts loading-timeline? unreadable]} @state/db]
+    [:div.timeline
      [unreadable-notice]
      (cond
-       (and loading-feed? (empty? posts))
-       [:p.hint "Loading feed…"]
+       (and loading-timeline? (empty? posts))
+       [:p.hint "Loading your timeline…"]
 
        ;; only claim emptiness when nothing failed — otherwise "no posts"
        ;; would be a guess dressed up as a fact
@@ -724,20 +724,41 @@
 ;; Shell
 
 (defn- header []
-  (let [{:keys [webid loading-feed?]} @state/db]
+  (let [{:keys [webid loading-timeline?]} @state/db]
     [:header.app-header
      [:h1 "Comms"]
      [:div.session
       [:a {:href webid :target "_blank" :rel "noopener" :title webid}
        (display-name webid)]
-      [:button.subtle {:on-click state/refresh-feed!
-                       :disabled loading-feed?
-                       :title "Refresh feed"}
-       (if loading-feed? "⟳ …" "⟳")]
+      [:button.subtle {:on-click state/refresh-timeline!
+                       :disabled loading-timeline?
+                       :title "Refresh"}
+       (if loading-timeline? "⟳ …" "⟳")]
       [:button.subtle {:on-click state/logout!} "Log out"]]]))
 
+(defn- tabs
+  "Two views: posting and reading, or deciding who sees what. They were
+   one screen and it was cluttered — the sharing panels are things you
+   set up occasionally, not while writing a post.
+
+   The waiting count rides on the tab, because moving the followers
+   panel off the default view would otherwise hide the one thing in it
+   that's time-sensitive: somebody waiting on you."
+  []
+  (let [{:keys [tab requests]} @state/db
+        waiting (count requests)]
+    [:nav.tabs
+     (for [[id label] [[:timeline "Timeline"] [:sharing "Sharing"]]]
+       ^{:key id}
+       [:button {:class (when (= tab id) "active")
+                 :aria-current (when (= tab id) "page")
+                 :on-click #(state/show-tab! id)}
+        label
+        (when (and (= :sharing id) (pos? waiting))
+          [:span.badge waiting])])]))
+
 (defn app []
-  (let [{:keys [checking-session? webid error]} @state/db]
+  (let [{:keys [checking-session? webid error tab]} @state/db]
     (cond
       checking-session?
       [:div.centered [:p.hint "Connecting…"]]
@@ -748,10 +769,15 @@
       :else
       [:div.shell
        [header]
+       [tabs]
+       ;; errors belong above whichever view raised them
        (when error [:div.error error])
-       [composer]
-       [audiences-panel]
-       [request-notice]
-       [followers-panel]
-       [contacts-panel]
-       [feed]])))
+       (if (= :sharing tab)
+         [:<>
+          [audiences-panel]
+          [request-notice]
+          [followers-panel]
+          [contacts-panel]]
+         [:<>
+          [composer]
+          [timeline]])])))
