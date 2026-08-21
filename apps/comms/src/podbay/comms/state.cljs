@@ -27,6 +27,8 @@
            :followers []         ; {:webid :containers} — who you've granted
            :followers-status nil ; :loading | :ready | :failed
            :follower-busy? false
+           :requests []          ; as:Follow entries sitting in your inbox
+           :request-notice nil   ; what happened when you asked to follow
            :apps {}              ; client id url -> the app's own name
            :loading-feed? false
            :posting? false
@@ -136,6 +138,7 @@
 
 (declare load-destinations!)
 (declare load-followers!)
+(declare load-requests!)
 
 (defn refresh-feed!
   "Reload posts from the user's own pod and every contact's pod,
@@ -151,7 +154,8 @@
     ;; transient failure as the feed itself — so refresh re-checks them
     (when-let [webid (:webid @db)]
       (load-destinations! webid)
-      (load-followers!))
+      (load-followers!)
+      (load-requests!))
     (-> (fetch-authors! authors)
         (p/then #(swap! db assoc :loading-feed? false))
         (p/catch #(set-error! (str "Couldn't load feed: " (.-message %)))))))
@@ -248,17 +252,49 @@
                 (refresh-feed!)))
       (p/catch #(set-error! (str "Couldn't publish post: " (.-message %))))))
 
-(defn- save-contacts! [contacts]
-  (swap! db assoc :contacts contacts)
-  (-> (pod/save-contacts+ (:webid @db) contacts)
-      (p/then (fn [_] (refresh-feed!)))
-      (p/catch #(set-error! (str "Couldn't save contacts: " (.-message %))))))
+(defn- save-contacts!
+  "Write the follow list, showing it immediately and putting it back if
+   the write fails.
 
-(defn add-contact! [webid]
+   Optimistic because a pod can take seconds and the list should feel
+   instant — but a failed write used to leave the app showing you
+   following someone the pod has no record of, so the feed had them and
+   a reload didn't. Rolling back keeps what's on screen equal to what
+   was stored."
+  [contacts]
+  (let [previous (:contacts @db)]
+    (swap! db assoc :contacts contacts)
+    (-> (pod/save-contacts+ (:webid @db) contacts)
+        (p/then (fn [_] (refresh-feed!)))
+        (p/catch (fn [e]
+                   (swap! db assoc :contacts previous)
+                   (set-error! (str "Couldn't save who you follow: "
+                                    (.-message e)
+                                    " — nothing was changed.")))))))
+
+(defn dismiss-notice! []
+  (swap! db assoc :request-notice nil))
+
+(defn add-contact!
+  "Follow someone, and ask them for access while you're at it.
+
+   Following is unilateral and takes effect immediately — you'll see
+   whatever they've made public. The request is a courtesy on top: it
+   saves you telling them yourself, and it can't fail in a way that
+   undoes the follow. Whitespace is trimmed; the WebID is otherwise
+   used exactly as given."
+  [webid]
   (let [webid (.trim webid)
         contacts (:contacts @db)]
     (when (and (seq webid) (not (some #{webid} contacts)))
-      (save-contacts! (conj contacts webid)))))
+      (save-contacts! (conj contacts webid))
+      (-> (pod/request-follow+ (:webid @db) webid)
+          (p/then (fn [outcome]
+                    ;; the outcome only; the name is resolved when this is
+                    ;; rendered, since the profile is very likely still in
+                    ;; flight right now
+                    (swap! db assoc :request-notice
+                           {:webid webid :outcome outcome})))))))
 
 (defn remove-contact! [webid]
   (save-contacts! (vec (remove #{webid} (:contacts @db)))))
@@ -351,11 +387,38 @@
         (p/then (fn [followers]
                   (swap! db assoc :followers followers
                                   :followers-status :ready
-                                  :follower-busy? false)))
+                                  :follower-busy? false)
+                  ;; likewise: you can give someone access without
+                  ;; following them back
+                  (load-profiles! (distinct (keep :webid followers)))))
         (p/catch (fn [e]
                    (js/console.warn "Couldn't read your followers" e)
                    (swap! db assoc :followers-status :failed
                                    :follower-busy? false))))))
+
+(defn load-requests!
+  "Follow requests waiting in your inbox. Silent when you have no
+   inbox — plenty of pods don't, and it isn't a fault."
+  []
+  (when-let [webid (:webid @db)]
+    (-> (pod/follow-requests+ webid)
+        (p/then (fn [requests]
+                  (swap! db assoc :requests requests)
+                  ;; someone asking for access is, by definition, someone
+                  ;; you may not follow — so nothing else would have
+                  ;; fetched their profile, and they'd show as a raw WebID
+                  (load-profiles! (distinct (keep :actor requests)))))
+        (p/catch (fn [e]
+                   (js/console.warn "Couldn't read follow requests" e))))))
+
+(defn dismiss-request!
+  "Ignore a request. Removes it from the inbox without granting
+   anything, and without telling the sender — there is nothing to say
+   that they couldn't infer from silence."
+  [url]
+  (swap! db update :requests #(vec (remove (fn [r] (= url (:url r))) %)))
+  (-> (pod/dismiss-request+ url)
+      (p/then (fn [_] (load-requests!)))))
 
 (defn grant-follower!
   "Let someone read one of your audiences.
@@ -369,7 +432,16 @@
     (when (and webid (seq follower) (seq container))
       (swap! db assoc :follower-busy? true :error nil)
       (-> (pod/grant-follower+ webid follower container)
-          (p/then (fn [_] (load-followers!)))
+          (p/then (fn [_]
+                    ;; the request has been answered, and the sender is
+                    ;; told so their UI can stop saying "requested" —
+                    ;; both best-effort, since the grant already stands
+                    (doseq [{:keys [url actor]} (:requests @db)
+                            :when (= actor follower)]
+                      (pod/dismiss-request+ url))
+                    (pod/accept-follow+ webid follower)
+                    (load-requests!)
+                    (load-followers!)))
           (p/catch (fn [e]
                      (swap! db assoc :follower-busy? false)
                      (set-error! (str "Couldn't give " follower " access: "
@@ -414,11 +486,12 @@
              (swap! db assoc :webid webid :loading-feed? true :error nil)
              (swap! feed-run inc)
              (load-destinations! webid)
-             ;; and who you've granted access to. Easy to miss: this is
-             ;; the *initial* load, which doesn't go through
-             ;; refresh-feed! — so anything that only appears there is
-             ;; absent until something else happens to refresh.
+             ;; and who you've granted access to, and who's asked. Easy
+             ;; to miss: this is the *initial* load, which doesn't go
+             ;; through refresh-feed! — so anything that only appears
+             ;; there is absent until something else happens to refresh.
              (load-followers!)
+             (load-requests!)
              ;; Your own posts and your contact list are independent, and
              ;; on a slow pod every round trip is seconds — so start both
              ;; at once rather than making the feed wait on the contacts

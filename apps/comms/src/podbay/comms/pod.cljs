@@ -665,6 +665,122 @@
                  (if (missing? e) [] (p/rejected e))))))
 
 ;; ---------------------------------------------------------------------------
+;; Follow requests
+;;
+;; Notification only. A follower finds what they may read from their own
+;; shared-with document, so nothing here is load-bearing: an inbox that
+;; doesn't exist, or a request that never arrives, costs a conversation
+;; rather than the feature. That is deliberate — an earlier design had
+;; discovery depend on this, which made an inbox a prerequisite for
+;; every participant.
+;;
+;; as:Follow / as:Accept is ActivityPub's own model, so a request left
+;; here is legible to anything else that speaks it.
+
+(defn inbox-url+
+  "Where to leave this person a notification, or nil if they don't
+   advertise one. Not an error: plenty of pods have no inbox, and ESS
+   doesn't create one."
+  [webid]
+  (-> (p/let [thing (profile-thing+ webid)]
+        (when thing (sc/getUrl thing sv/ldp-inbox)))
+      (p/catch (fn [_] nil))))
+
+(defn request-follow+
+  "Leave an as:Follow in someone's inbox.
+
+   Best-effort by design. Resolves to :sent, :no-inbox, or :refused —
+   never rejects — because following someone works regardless: this only
+   saves you having to tell them yourself. POSTing creates a new
+   resource in the container, which is what an inbox is for; we can't
+   read it back afterwards, since Append is not Read."
+  [me target]
+  (-> (p/let [inbox (inbox-url+ target)]
+        (if-not inbox
+          :no-inbox
+          (p/let [thing (-> (sc/createThing #js {:name "it"})
+                            (sc/addUrl sv/rdf-type v/as-Follow)
+                            (sc/addUrl v/as-actor me)
+                            (sc/addUrl v/as-object target)
+                            (sc/addDatetime v/as-published (js/Date.)))
+                  ds (sc/setThing (sc/createSolidDataset) thing)
+                  _ (sc/saveSolidDatasetInContainer inbox ds (auth/opts))]
+            :sent)))
+      (p/catch (fn [e]
+                 (js/console.warn "Couldn't leave a follow request for" target e)
+                 :refused))))
+
+(defn- thing->request [url thing]
+  (when (some #(= % v/as-Follow) (array-seq (sc/getUrlAll thing sv/rdf-type)))
+    {:url url
+     :actor (sc/getUrl thing v/as-actor)
+     :object (sc/getUrl thing v/as-object)
+     :published (sc/getDatetime thing v/as-published)}))
+
+(defn follow-requests+
+  "Follow requests sitting in your own inbox, newest first.
+
+   Only entries typed as:Follow and addressed to you — an inbox anyone
+   may append to will collect other things, and a request naming someone
+   else is not yours to answer. One unreadable entry is skipped rather
+   than hiding the rest."
+  [webid]
+  (-> (p/let [inbox (inbox-url+ webid)]
+        (if-not inbox
+          []
+          (p/let [ds (sc/getSolidDataset inbox (auth/fresh-opts))
+                  urls (->> (array-seq (sc/getContainedResourceUrlAll ds))
+                            (remove #(str/ends-with? % "/")))
+                  entries (p/all
+                           (map (fn [url]
+                                  (-> (p/let [d (sc/getSolidDataset url (auth/opts))]
+                                        (->> (array-seq (sc/getThingAll d))
+                                             (keep #(thing->request url %))
+                                             first))
+                                      (p/catch (fn [e]
+                                                 (js/console.warn
+                                                  "Skipping unreadable inbox entry" url e)
+                                                 nil))))
+                                urls))]
+            (->> entries
+                 (remove nil?)
+                 (filter #(= webid (:object %)))
+                 (sort-by #(if-let [d (:published %)] (- (.getTime d)) 0))
+                 vec))))
+      (p/catch (fn [e]
+                 (js/console.warn "Couldn't read your inbox" e)
+                 []))))
+
+(defn dismiss-request+
+  "Delete a request once it has been acted on. Tolerates it being gone
+   already, which is the desired state either way."
+  [url]
+  (-> (sc/deleteSolidDataset url (auth/opts))
+      (p/catch (fn [e]
+                 (when-not (missing? e)
+                   (js/console.warn "Couldn't remove" url e))
+                 nil))))
+
+(defn accept-follow+
+  "Tell someone their request was granted, so their app can stop saying
+   'requested' without waiting for a refresh. A courtesy: they'd find
+   the grant anyway through their shared-with document."
+  [me follower]
+  (-> (p/let [inbox (inbox-url+ follower)]
+        (when inbox
+          (p/let [thing (-> (sc/createThing #js {:name "it"})
+                            (sc/addUrl sv/rdf-type v/as-Accept)
+                            (sc/addUrl v/as-actor me)
+                            (sc/addUrl v/as-object follower)
+                            (sc/addDatetime v/as-published (js/Date.)))
+                  ds (sc/setThing (sc/createSolidDataset) thing)]
+            (sc/saveSolidDatasetInContainer inbox ds (auth/opts))
+            :sent)))
+      (p/catch (fn [e]
+                 (js/console.warn "Couldn't confirm to" follower e)
+                 nil))))
+
+;; ---------------------------------------------------------------------------
 ;; What each follower may read
 ;;
 ;; One small document per follower, granted to them alone, listing the
@@ -688,23 +804,39 @@
 (defn follower-filename
   "The name of the document recording what one follower may read.
 
-   Both sides derive this from the same WebID, so it has to agree
-   exactly — which is why WebIDs are never normalised. Percent encoding
-   makes a URL usable as a path segment while staying legible: Airlock's
-   entry-name decodes it back for display."
-  [follower]
-  (str (js/encodeURIComponent follower) ".ttl"))
+   The WebID with anything outside RFC 3986's *unreserved* set —
+   `A-Za-z0-9-._~` — escaped as `_` plus hex. So `_2F` is a slash and
+   `_3A` a colon:
 
-(defn filename->follower
-  "The WebID a shared-with document is for, from its URL — the inverse of
-   follower-filename, used to read the follower list back out of the
-   container listing."
-  [url]
-  (-> url
-      (str/split #"/")
-      last
-      (str/replace #"\.ttl$" "")
-      js/decodeURIComponent))
+     https://id.inrupt.com/alice
+     https_3A_2F_2Fid.inrupt.com_2Falice.ttl
+
+   Cluttered, but you can read whose it is, which matters when browsing
+   your own pod.
+
+   **Why not percent-encoding**, which was tried first: Community Solid
+   Server decoded `%2F` when creating the resource while the ACL kept
+   the name we asked for, leaving the file governed by an authorisation
+   naming a URL that didn't exist — unmanageable by anyone, including
+   its owner. The unreserved set is the one a conforming server must
+   leave alone, because escaping those characters is *defined* as
+   equivalent to not escaping them. Emit only those and there is
+   nothing to normalise.
+
+   Injective, which is the property that actually matters: two WebIDs
+   never collide, so one follower's record can't overwrite another's.
+   Not reversible, and it needn't be — this derives a *location*, while
+   identity is read from foaf:primaryTopic inside the document, the one
+   thing a server can't rename."
+  [follower]
+  (str (str/replace follower
+                    #"[^A-Za-z0-9.~-]"
+                    (fn [c]
+                      (str "_" (-> (.charCodeAt c 0)
+                                   (.toString 16)
+                                   (.toUpperCase)
+                                   (.padStart 2 "0")))))
+       ".ttl"))
 
 (defn- shared-with-url+ [owner follower]
   (p/let [dir (shared-with-dir+ owner)]
@@ -749,7 +881,14 @@
               ;; replace rather than amend: this is the whole list
               cleared (cond-> base existing (sc/removeThing url))
               thing (reduce (fn [th c] (sc/addUrl th v/solid-instanceContainer c))
-                            (sc/createThing #js {:url url})
+                            ;; the WebID is recorded *in* the document, not
+                            ;; left implicit in its name. The name is how a
+                            ;; follower finds this, but a server may rewrite
+                            ;; percent-escapes in a resource name, so the
+                            ;; filename is not a reliable identifier to read
+                            ;; back — only to look up.
+                            (-> (sc/createThing #js {:url url})
+                                (sc/addUrl v/foaf-primaryTopic follower))
                             containers)
               _ (sc/saveSolidDatasetAt url (sc/setThing cleared thing) (auth/opts))]
         ;; the document is no use to them if they can't read it
@@ -769,11 +908,29 @@
                         (remove #(str/ends-with? % "/")))
               entries (p/all
                        (map (fn [url]
-                              (let [follower (filename->follower url)]
-                                (p/let [containers (granted-containers+ owner follower)]
-                                  {:webid follower :containers containers})))
+                              ;; read the document rather than trusting its
+                              ;; name: the WebID inside is what we wrote,
+                              ;; the name is whatever the server kept
+                              (-> (p/let [ds (sc/getSolidDataset url (auth/fresh-opts))
+                                          thing (sc/getThing ds url)]
+                                    ;; only the document knows whose it is;
+                                    ;; its name is a lookup key, not an
+                                    ;; identifier, and a server may rewrite it
+                                    {:webid (some-> thing
+                                                    (sc/getUrl v/foaf-primaryTopic))
+                                     :containers (if thing
+                                                   (vec (array-seq
+                                                         (sc/getUrlAll
+                                                          thing
+                                                          v/solid-instanceContainer)))
+                                                   [])})
+                                  (p/catch (fn [e]
+                                             (js/console.warn
+                                              "Skipping unreadable follower record"
+                                              url e)
+                                             nil))))
                             urls))]
-        (vec (sort-by :webid entries)))
+        (vec (sort-by :webid (filter :webid (remove nil? entries)))))
       ;; no shared-with container yet means you have granted nobody
       (p/catch (fn [e]
                  (when-not (missing? e)

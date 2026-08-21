@@ -24,6 +24,15 @@
 (def as-generator (str as "generator"))
 (def as-following (str as "following"))
 
+;; A follow request, and its answer. ActivityPub's own model, so this is
+;; using the vocabulary as intended rather than inventing a protocol.
+;; Notification only: nothing depends on these arriving — a follower
+;; finds what they may read from their shared-with document.
+(def as-Follow (str as "Follow"))
+(def as-Accept (str as "Accept"))
+(def as-actor (str as "actor"))
+(def as-object (str as "object"))
+
 (def ^:private foaf "http://xmlns.com/foaf/0.1/")
 (def ^:private vcard "http://www.w3.org/2006/vcard/ns#")
 
@@ -48,6 +57,7 @@
 (def dcterms-title (str dcterms "title"))
 
 (def foaf-name (str foaf "name"))
+(def foaf-primaryTopic (str foaf "primaryTopic"))
 (def foaf-img (str foaf "img"))
 (def vcard-fn (str vcard "fn"))
 (def vcard-hasPhoto (str vcard "hasPhoto"))

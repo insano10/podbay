@@ -60,9 +60,23 @@
 
 (def ^:private retry-methods
   "Only methods that can be repeated without changing the outcome.
-   POST creates something new each time, and PATCH may not survive being
-   applied twice, so neither is retried."
-  #{"GET" "HEAD" "OPTIONS" "PUT" "DELETE"})
+   POST creates something new on each attempt, so it is never retried.
+
+   PATCH is retried, having originally been excluded on the reasoning
+   that a patch may not survive being applied twice. That is true of
+   SPARQL in general and not of anything sent from here: solid-client
+   emits `DELETE DATA` and `INSERT DATA` and nothing else, and both are
+   idempotent — deleting an absent triple is a no-op, inserting a
+   present one likewise. So a retry after a response we never saw is
+   safe even if the first attempt actually landed.
+
+   The exclusion was costly, because PATCH is what updates an *existing*
+   document: the contacts list, the audience manifest, a follower's
+   record. Every other operation absorbed a flaky server's 502 and those
+   silently did not, which on solidcommunity.net meant a lost write.
+   Revisit this if solid-client ever emits a conditional patch form,
+   where reapplying would not be a no-op."
+  #{"GET" "HEAD" "OPTIONS" "PUT" "PATCH" "DELETE"})
 
 (def ^:private read-methods
   "Methods for which falling back to an anonymous request makes sense.
@@ -70,7 +84,12 @@
    without them either."
   #{"GET" "HEAD" "OPTIONS"})
 
-(def ^:private max-attempts 3)
+(def ^:private max-attempts
+  "Four, not three. solidcommunity.net has been observed needing several
+   goes before answering, and three attempts spans only 1.2s of backoff
+   — enough for a blip, not for the sustained flakiness actually seen.
+   Only failing requests pay the extra wait."
+  4)
 
 (defn- method-of [init]
   (str/upper-case (or (some-> ^js init .-method) "GET")))

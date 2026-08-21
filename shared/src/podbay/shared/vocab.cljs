@@ -11,5 +11,10 @@
 
 ;; how a server describes a container and the things inside it
 (def ldp-Container "http://www.w3.org/ns/ldp#Container")
+
+;; Where to leave someone a notification. Linked Data Notifications:
+;; anyone with Append may POST here, and Append is not Read — a sender
+;; can leave a message and cannot read the inbox or anyone else's.
+(def ldp-inbox "http://www.w3.org/ns/ldp#inbox")
 (def dc-modified "http://purl.org/dc/terms/modified")
 (def posix-size "http://www.w3.org/ns/posix/stat#size")

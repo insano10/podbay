@@ -299,12 +299,17 @@ One small document per follower, listing only the containers **that
 person** may read:
 
 ```
-podbay/comms/shared-with/https%3A%2F%2Falice.example%2Fcard%23me.ttl
+podbay/comms/shared-with/https_3A_2F_2Falice.example_2Fcard_23me.ttl
 ```
 
 ```turtle
-<> solid:instanceContainer <https://bob.example/podbay/comms/posts/3e739645/> .
+<> foaf:primaryTopic <https://alice.example/card#me> ;
+   solid:instanceContainer <https://bob.example/podbay/comms/posts/3e739645/> .
 ```
+
+The `primaryTopic` is what the owner's own app reads to say whose record
+this is. Deriving that from the filename looked tidier and was wrong:
+a server may rewrite a resource name, and one did.
 
 Granted read to that follower alone. Alice fetches hers, then the
 containers it names: **two requests per contact, and no 401s**.
@@ -313,10 +318,30 @@ containers it names: **two requests per contact, and no 401s**.
 that filename: the owner browsing their own pod, the follower it
 belongs to — for whom it is their own WebID — and everyone else, who
 gets 401 and cannot list the container either, since reading a resource
-you've been granted needs no access to its parent. Hashing would
-defend only against someone who could list the container but not read
-its contents, which is nobody. Percent-encoded, Airlock's `entry-name`
-decodes it back to the plain WebID when browsing.
+you've been granted needs no access to its parent. Hashing would defend
+only against someone who could list the container but not read its
+contents, which is nobody.
+
+**Escaped into RFC 3986's unreserved set** — `A-Za-z0-9-._~` — with
+everything else written as `_` plus hex, so `_2F` is a slash and `_3A`
+a colon. Cluttered, but the host and username stay readable.
+
+Percent-encoding was the first attempt and is **unsafe**. Community
+Solid Server decoded `%2F` when creating the resource while the ACL
+kept the name we had asked for, so the file ended up governed by an
+authorisation naming a URL that didn't exist — unreadable and
+undeletable by anyone, including its owner. The unreserved set is the
+one a conforming server must leave alone, because escaping those
+characters is *defined* as equivalent to not escaping them; emit only
+those and there is nothing to normalise.
+
+The property that matters is **injectivity**, not reversibility: two
+WebIDs must never share a document, or one follower's record would
+overwrite another's and hand out the wrong access. Reversibility isn't
+needed at all, because identity is read from `foaf:primaryTopic` inside
+the document — the one thing a server can't rename. Deriving a location
+and reading an identity are different jobs, and conflating them was the
+original mistake.
 
 Note this is the opposite rule to audience container names, and the
 difference is the point: an audience container's URL is handed to a

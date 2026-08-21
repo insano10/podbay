@@ -394,6 +394,30 @@
                                  :on-click #(reset! adopting url)}
                  "Adopt"])])]])])))
 
+(defn- request-notice
+  "What happened when you asked someone for access. Worth saying out
+   loud: following worked either way, and the difference between 'asked'
+   and 'couldn't ask' decides whether you need to go and tell them.
+
+   The wording is built here rather than when the request was sent,
+   because their profile is very likely still loading at that moment —
+   composed too early it says a bare WebID and stays that way."
+  []
+  (when-let [{:keys [webid outcome]} (:request-notice @state/db)]
+    (let [who (display-name webid)]
+      [:div.notice {:class (when (not= :sent outcome) "warn")}
+       (case outcome
+         :sent (str "Asked " who " for access to their posts.")
+         :no-inbox (str who " has no inbox, so they can't be asked from"
+                        " here — send them your WebID and they can give"
+                        " you access.")
+         :refused (str "Couldn't leave a request for " who
+                       " — their pod wouldn't accept it. You'll still see"
+                       " anything they make public.")
+         (str "Followed " who "."))
+       [:button.subtle {:on-click state/dismiss-notice!
+                        :title "Dismiss"} "✕"]])))
+
 (defn followers-panel
   "Who can read your posts, and the one place to change it.
 
@@ -403,14 +427,17 @@
   []
   (r/with-let [new-follower (r/atom "")
                chosen (r/atom nil)]
-    (let [{:keys [audiences followers followers-status follower-busy?]} @state/db
+    (let [{:keys [audiences followers followers-status follower-busy? requests]}
+          @state/db
           ;; dereferenced here, not inside the loops below — a deref in a
           ;; lazy seq isn't tracked, so the panel wouldn't redraw
           typed @new-follower
           picked (or @chosen (:container (first audiences)))
           ready? (and (seq (str/trim typed)) picked (not follower-busy?))]
       [:details.followers
-       [:summary "Followers (" (count followers) ")"]
+       [:summary "Followers (" (count followers) ")"
+        (when (seq requests)
+          [:span.badge (count requests) " waiting"])]
        (if (empty? audiences)
          [:p.hint "Make an audience first — that's what you'd be giving
                    someone access to."]
@@ -437,6 +464,34 @@
                                  (state/grant-follower! typed picked)
                                  (reset! new-follower ""))}
             (if follower-busy? "Working…" "Give access")]]])
+
+       ;; requests first: something waiting for you should be the first
+       ;; thing you see, and it needs the same audience choice as a
+       ;; manual grant
+       (when (seq requests)
+         [:ul.contact-list.requests
+          (for [{:keys [url actor]} requests]
+            ^{:key url}
+            [:li
+             [:span.who {:title actor} (display-name actor)
+              [:span.asked " asked for access"]]
+             [:span.granted
+              (if (empty? audiences)
+                [:span.hint "make an audience first"]
+                [:<>
+                 (when (> (count audiences) 1)
+                   [:select {:value (or picked "")
+                             :disabled follower-busy?
+                             :on-change #(reset! chosen (.. % -target -value))}
+                    (for [{:keys [label container]} audiences]
+                      ^{:key container} [:option {:value container} label])])
+                 [:button {:disabled follower-busy?
+                           :on-click #(state/grant-follower! actor picked)}
+                  "Allow"]])
+              [:button.subtle {:disabled follower-busy?
+                               :title "Ignore, and remove the request"
+                               :on-click #(state/dismiss-request! url)}
+               "✕"]]])])
 
        (case followers-status
          :loading [:p.hint "Checking…"]
@@ -696,6 +751,7 @@
        (when error [:div.error error])
        [composer]
        [audiences-panel]
+       [request-notice]
        [followers-panel]
        [contacts-panel]
        [feed]])))

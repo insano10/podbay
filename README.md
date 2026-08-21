@@ -752,12 +752,27 @@ transient outage is indistinguishable from a configuration error at a
 glance. (The tell is that a real CORS misconfiguration fails *every*
 time, identically; a blip fails once and then works.)
 
-`auth/auth-fetch` therefore retries: up to three attempts with a
-300ms/900ms backoff plus jitter, on a rejected request or a
-429/500/502/503/504 response. Only repeatable methods are retried —
-`GET`, `HEAD`, `OPTIONS`, `PUT`, `DELETE` — since `POST` creates
-something new on each attempt and `PATCH` may not survive being applied
-twice. Any 4xx is an answer, not a failure, and comes straight back.
+`auth/auth-fetch` therefore retries: up to **four** attempts with a
+300ms/900ms/2700ms backoff plus jitter, on a rejected request or a
+429/500/502/503/504 response. Any 4xx is an answer, not a failure, and
+comes straight back.
+
+Four rather than three because three spans only 1.2s of backoff, and
+solidcommunity.net has been seen needing more than that. Only failing
+requests pay the extra wait.
+
+Every method is retried except `POST`, which creates something new on
+each attempt. **`PATCH` included** — it was originally excluded on the
+grounds that a patch may not survive being applied twice, which is true
+of SPARQL in general and false of anything sent from here: solid-client
+emits `DELETE DATA` and `INSERT DATA` and nothing else, and both are
+idempotent. Deleting an absent triple is a no-op and inserting a present
+one likewise, so reapplying after a response we never saw is safe.
+
+That exclusion was expensive, and it took a lost write to notice.
+`PATCH` is precisely what updates an *existing* document — the contacts
+list, the audience manifest, a follower's record — so every other
+operation absorbed a 502 while those, alone, silently did not.
 
 Every pod request in both apps goes through it, so this is also the most
 likely reason the third-party pod browsers feel unreliable: they surface
