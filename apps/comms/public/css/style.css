@@ -198,6 +198,36 @@ input, textarea {
 .adopt-name { display: flex; gap: 0.35rem; align-items: center; }
 .adopt-name input { width: 9rem; }
 
+/* -------------------------------------------------------------- followers */
+
+.followers {
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: 0.75rem;
+  padding: 0.75rem 1rem;
+  margin-bottom: 1rem;
+}
+.followers summary { cursor: pointer; font-weight: 500; }
+.followers .hint { margin: 0.5rem 0; }
+.followers select {
+  font: inherit; font-size: 0.9rem; padding: 0.4rem;
+  border: 1px solid var(--border); border-radius: 0.5rem;
+  background: var(--surface); color: var(--text);
+}
+.followers .who { font-weight: 500; }
+.granted { display: flex; flex-wrap: wrap; gap: 0.35rem; align-items: center; }
+.granted-audience {
+  display: inline-flex; align-items: center; gap: 0.15rem;
+  font-size: 0.75rem; color: var(--text-muted);
+  border: 1px solid var(--border); border-radius: 999px;
+  padding: 0.05rem 0.15rem 0.05rem 0.5rem;
+}
+.followers .warn { font-size: 0.9rem; color: var(--error-text); }
+.followers button.link {
+  background: none; border: none; padding: 0; font: inherit;
+  color: var(--accent); text-decoration: underline; cursor: pointer;
+}
+
 /* --------------------------------------------------------------- contacts */
 
 .contacts {

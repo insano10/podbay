@@ -24,6 +24,9 @@
            :audiences []         ; {:id :label :container}, this app's own
            :registered []        ; containers the pod registers for as:Note
            :audience-busy? false
+           :followers []         ; {:webid :containers} — who you've granted
+           :followers-status nil ; :loading | :ready | :failed
+           :follower-busy? false
            :apps {}              ; client id url -> the app's own name
            :loading-feed? false
            :posting? false
@@ -132,6 +135,7 @@
                  authors))))
 
 (declare load-destinations!)
+(declare load-followers!)
 
 (defn refresh-feed!
   "Reload posts from the user's own pod and every contact's pod,
@@ -145,7 +149,9 @@
     (rebuild-feed! (select-keys (:posts-by-author @db) authors))
     ;; where you can post, and who can read it, are as prone to a
     ;; transient failure as the feed itself — so refresh re-checks them
-    (when-let [webid (:webid @db)] (load-destinations! webid))
+    (when-let [webid (:webid @db)]
+      (load-destinations! webid)
+      (load-followers!))
     (-> (fetch-authors! authors)
         (p/then #(swap! db assoc :loading-feed? false))
         (p/catch #(set-error! (str "Couldn't load feed: " (.-message %)))))))
@@ -335,6 +341,52 @@
                    (set-error! (str "Couldn't update your audiences: "
                                     (.-message e))))))))
 
+(defn load-followers!
+  "Who you've granted an audience to. Read from the shared-with
+   container, which is the record rather than a copy of it."
+  []
+  (when-let [webid (:webid @db)]
+    (swap! db assoc :followers-status :loading)
+    (-> (pod/followers+ webid)
+        (p/then (fn [followers]
+                  (swap! db assoc :followers followers
+                                  :followers-status :ready
+                                  :follower-busy? false)))
+        (p/catch (fn [e]
+                   (js/console.warn "Couldn't read your followers" e)
+                   (swap! db assoc :followers-status :failed
+                                   :follower-busy? false))))))
+
+(defn grant-follower!
+  "Let someone read one of your audiences.
+
+   The WebID is used exactly as given — see the exact-match principle in
+   docs/following.md. Whitespace is trimmed, which removes a paste
+   accident rather than reinterpreting the identifier."
+  [follower container]
+  (let [follower (str/trim follower)
+        webid (:webid @db)]
+    (when (and webid (seq follower) (seq container))
+      (swap! db assoc :follower-busy? true :error nil)
+      (-> (pod/grant-follower+ webid follower container)
+          (p/then (fn [_] (load-followers!)))
+          (p/catch (fn [e]
+                     (swap! db assoc :follower-busy? false)
+                     (set-error! (str "Couldn't give " follower " access: "
+                                      (.-message e)))))))))
+
+(defn revoke-follower!
+  "Take one audience back from one person."
+  [follower container]
+  (when-let [webid (:webid @db)]
+    (swap! db assoc :follower-busy? true :error nil)
+    (-> (pod/revoke-follower+ webid follower container)
+        (p/then (fn [_] (load-followers!)))
+        (p/catch (fn [e]
+                   (swap! db assoc :follower-busy? false)
+                   (set-error! (str "Couldn't remove access for " follower ": "
+                                    (.-message e))))))))
+
 (defn login! [issuer]
   (swap! db assoc :error nil)
   (-> (auth/login! issuer)
@@ -362,6 +414,11 @@
              (swap! db assoc :webid webid :loading-feed? true :error nil)
              (swap! feed-run inc)
              (load-destinations! webid)
+             ;; and who you've granted access to. Easy to miss: this is
+             ;; the *initial* load, which doesn't go through
+             ;; refresh-feed! — so anything that only appears there is
+             ;; absent until something else happens to refresh.
+             (load-followers!)
              ;; Your own posts and your contact list are independent, and
              ;; on a slow pod every round trip is seconds — so start both
              ;; at once rather than making the feed wait on the contacts

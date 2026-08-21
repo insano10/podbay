@@ -394,6 +394,72 @@
                                  :on-click #(reset! adopting url)}
                  "Adopt"])])]])])))
 
+(defn followers-panel
+  "Who can read your posts, and the one place to change it.
+
+   This is the whole point of the audiences work: giving someone access
+   used to mean opening Airlock, finding the container and understanding
+   a sharing pane. Here it's a WebID, an audience, and a button."
+  []
+  (r/with-let [new-follower (r/atom "")
+               chosen (r/atom nil)]
+    (let [{:keys [audiences followers followers-status follower-busy?]} @state/db
+          ;; dereferenced here, not inside the loops below — a deref in a
+          ;; lazy seq isn't tracked, so the panel wouldn't redraw
+          typed @new-follower
+          picked (or @chosen (:container (first audiences)))
+          ready? (and (seq (str/trim typed)) picked (not follower-busy?))]
+      [:details.followers
+       [:summary "Followers (" (count followers) ")"]
+       (if (empty? audiences)
+         [:p.hint "Make an audience first — that's what you'd be giving
+                   someone access to."]
+         [:<>
+          [:p.hint
+           "Anyone here can read the posts in the audience you choose,
+            and nothing else. They'll see them without being told where
+            to look."]
+          [:div.contact-add
+           [:input {:type "url"
+                    :placeholder "https://alice.solidcommunity.net/profile/card#me"
+                    :value typed
+                    :spell-check false
+                    :disabled follower-busy?
+                    :on-change #(reset! new-follower (.. % -target -value))}]
+           (when (> (count audiences) 1)
+             [:select {:value (or picked "")
+                       :disabled follower-busy?
+                       :on-change #(reset! chosen (.. % -target -value))}
+              (for [{:keys [label container]} audiences]
+                ^{:key container} [:option {:value container} label])])
+           [:button {:disabled (not ready?)
+                     :on-click (fn []
+                                 (state/grant-follower! typed picked)
+                                 (reset! new-follower ""))}
+            (if follower-busy? "Working…" "Give access")]]])
+
+       (case followers-status
+         :loading [:p.hint "Checking…"]
+         :failed [:p.warn "Couldn't read who you've given access to. "
+                  [:button.link {:on-click state/load-followers!} "Try again"]]
+         (when (seq followers)
+           [:ul.contact-list
+            (for [{:keys [webid containers]} followers]
+              ^{:key webid}
+              [:li
+               [:span.who {:title webid} (display-name webid)]
+               [:span.granted
+                (for [c containers]
+                  ^{:key c}
+                  [:span.granted-audience
+                   (state/audience-label c)
+                   [:button.subtle
+                    {:disabled follower-busy?
+                     :title (str "Remove " (display-name webid) " from "
+                                 (state/audience-label c))
+                     :on-click #(state/revoke-follower! webid c)}
+                    "✕"]])]])]))])))
+
 (defn contacts-panel []
   (r/with-let [new-contact (r/atom "")]
     (let [{:keys [contacts]} @state/db]
@@ -630,5 +696,6 @@
        (when error [:div.error error])
        [composer]
        [audiences-panel]
+       [followers-panel]
        [contacts-panel]
        [feed]])))

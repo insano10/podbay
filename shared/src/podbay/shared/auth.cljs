@@ -148,6 +148,40 @@
                  resp))]
        (p/then (attempt 1) anonymously)))))
 
+(defn opts
+  "Options for @inrupt/solid-client calls: our retrying, session-bound
+   fetch. Lives here rather than in each app so there is one definition
+   of what talking to a pod means."
+  []
+  #js {:fetch auth-fetch})
+
+;; Pod responses carry no Cache-Control but do carry Last-Modified,
+;; which makes them *heuristically* cacheable: the browser may reuse one
+;; for a while without asking. That's wrong for anything we might have
+;; just changed — a listing fetched right after a delete would still
+;; contain the deleted file, and an access control resource read straight
+;; after a grant would report the rules as they were.
+;;
+;; "no-cache" rather than "no-store": the response is still cached, but
+;; every read revalidates against the server, which answers 304 Not
+;; Modified when nothing has changed. Correctness without throwing the
+;; cache away — pods supply both ETag and Last-Modified, so revalidation
+;; is cheap.
+(defn revalidate-init
+  "Add no-cache to a request init, for a one-off fetch that must not be
+   served from cache."
+  [init]
+  (js/Object.assign #js {} (or init #js {}) #js {:cache "no-cache"}))
+
+(defn revalidating-fetch [url init]
+  (auth-fetch url (revalidate-init init)))
+
+(defn fresh-opts
+  "Options for a read that must not come from cache — anything we may
+   have just written, or are about to."
+  []
+  #js {:fetch revalidating-fetch})
+
 (defn- session-info []
   (.-info ^js session))
 

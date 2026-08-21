@@ -46,6 +46,22 @@ where most of the friction is.
   other audiences: public is a superset of all of them and then some,
   so the combination is never what anyone means, and writing both would
   send two copies to everyone who can read either.
+- **The public type index lists only what the public can actually
+  read.** Registering a container and then refusing everyone announces
+  to the world that you keep posts somewhere and declines to say more —
+  a claim about where to find something whose answer is always 401. It
+  is also surprising in a way that matters: a public index is what
+  another app reads to discover your data, and an entry that never
+  resolves for anyone is noise to every reader except the few already
+  granted.
+
+  So: public audiences are registered, private ones never are. A
+  private audience is found by the people it was granted to, through
+  their [`shared-with` document](#a-followers-own-map-shared-with).
+  This generalises the two objections that shaped the design — against
+  registering private audiences, and against leaving an existing
+  private container registered — and it gives the index one meaning
+  rather than two.
 - **A WebID is matched exactly, never normalised.** No trailing-slash
   tolerance, no case folding, no adding or dropping `#me`. Those are
   different IRIs, and `…/card` legitimately denotes the *document*
@@ -231,19 +247,33 @@ one, failing only when *every* source fails.
 
 ### Private audiences: not registered anywhere public
 
-The public type index is for data whose *location* you're content to
-publish. Solid ships the pair — `publicTypeIndex` and
-`privateTypeIndex` — precisely to separate that from data whose
-location you aren't. Registering a private audience in the public index
-misuses the wrong half of a mechanism designed with this exact split in
-mind, and it is surprising in its own right: it advertises a container
-to the whole world and then refuses everyone.
+Per the principle above. Worth adding that Solid ships the pair —
+`publicTypeIndex` and `privateTypeIndex` — precisely to separate data
+whose location you'll publish from data whose location you won't, so
+registering a private audience publicly isn't only surprising, it uses
+the wrong half of a mechanism built for this exact split.
 
 Registering with opaque names was considered, on the grounds that it
-leaks only a *count* rather than the shape of someone's relationships,
-and that it would make the inbox a convenience rather than a
-prerequisite. Rejected for the reason above. The count is also
-permanent and public, and grows.
+leaks a *count* rather than the shape of someone's relationships, and
+that it would make the inbox a convenience rather than a prerequisite.
+Rejected: the count is permanent, public and grows, and `shared-with`
+turned out to remove the inbox from the discovery path anyway.
+
+**Migrating a container that is already registered** — an existing
+private posts container, from before audiences — takes three steps in
+this order:
+
+1. Grant each follower through Comms, which writes their `shared-with`
+   document and gives them a discovery path independent of the index.
+2. Check their feed still shows the posts, now arriving through
+   `shared-with` rather than the registration.
+3. Remove the registration.
+
+The other order silently drops those posts from every follower's feed
+until step 1 catches up. Comms only ever *adds* registrations, so the
+removal is a hand edit of the type index — a small Turtle change, and
+reversible. The owner's own feed is unaffected throughout, because an
+adopted container is in the manifest and `post-sources+` reads that.
 
 ### The owner's own feed
 
@@ -554,8 +584,13 @@ audience, which is what the composer does today.
 
 ## Still open
 
-- Migrating an existing flat posts container into audience containers:
-  move the posts, or adopt the container as a single audience?
+- Migrating an existing *flat* posts container — one holding posts
+  directly rather than being an audience — into audiences: move the
+  posts into a new audience container, or adopt the container wholesale
+  as a single audience? Adopting is one click and loses nothing;
+  moving means every post's URL changes, which breaks any absolute
+  reference to it. (Removing a stale *registration* is settled — see
+  Discovery.)
 - Whether the manifest should be discoverable by other Podbay apps, or
   stay private to Comms.
 - Whether Airlock should learn to read the manifest, so opaque

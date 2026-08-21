@@ -14,6 +14,7 @@
   (:require ["@inrupt/solid-client" :as sc]
             [clojure.string :as str]
             [promesa.core :as p]
+            [podbay.shared.access :as access]
             [podbay.shared.auth :as auth]
             [podbay.shared.vocab :as sv]
             [podbay.comms.vocab :as v]))
@@ -25,21 +26,9 @@
    publishes a type index decides for itself where posts live."
   "podbay/comms/")
 
-(defn- opts [] #js {:fetch auth/auth-fetch})
 
-;; Pod responses carry no Cache-Control but do carry Last-Modified, so
-;; the browser may reuse one without revalidating. Harmless for a post,
-;; which never changes — but wrong for anything we've just written: a
-;; container listing fetched right after publishing can come back
-;; without the new post in it.
-;;
-;; "no-cache" still caches; it just forces a revalidation on every read,
-;; so an unchanged resource costs a 304 rather than a full body.
-(defn- revalidating-fetch [url init]
-  (auth/auth-fetch url (js/Object.assign #js {} (or init #js {})
-                                         #js {:cache "no-cache"})))
-
-(defn- fresh-opts [] #js {:fetch revalidating-fetch})
+;; Fetch options — including the no-cache reasoning — live in
+;; podbay.shared.auth, so both apps mean the same thing by them.
 
 ;; ---------------------------------------------------------------------------
 ;; Discovery
@@ -70,7 +59,7 @@
   "The WebID profile document as a dataset. Rejects if it can't be read."
   [webid]
   (or (get @profile-cache webid)
-      (let [ds+ (-> (sc/getSolidDataset webid (opts))
+      (let [ds+ (-> (sc/getSolidDataset webid (auth/opts))
                     (p/catch (fn [e]
                                ;; a cached failure would poison the whole
                                ;; session, so forget it and let the next
@@ -100,7 +89,7 @@
    the card, in which case this is empty and costs one lookup, cached."
   [webid]
   (or (get @alt-profiles-cache webid)
-      (let [ds+ (-> (p/let [profiles (sc/getProfileAll webid (opts))]
+      (let [ds+ (-> (p/let [profiles (sc/getProfileAll webid (auth/opts))]
                       (vec (array-seq (.-altProfileAll ^js profiles))))
                     (p/catch (fn [e]
                                ;; frequently unreadable by design — that's
@@ -159,7 +148,7 @@
   (or (get @type-index-cache webid)
       (let [ds+ (-> (p/let [url (profile-url+ webid v/solid-publicTypeIndex)]
                       (when url
-                        (-> (sc/getSolidDataset url (opts))
+                        (-> (sc/getSolidDataset url (auth/opts))
                             (p/catch (fn [e]
                                        (if (missing? e) nil (p/rejected e)))))))
                     (p/catch (fn [e]
@@ -235,15 +224,35 @@
                    [])))
     []))
 
+(declare granted-containers+)
+
+(defn- granted-to-me+
+  "Containers this person has granted *me* read on, from the shared-with
+   document they wrote for me. Nothing for myself — my own audiences
+   come from my own manifest.
+
+   This is how a private audience is discovered: I derive the location
+   of my own document from my own WebID, so nobody has to tell me it
+   exists. Refused or missing both mean 'nothing for you', and both come
+   back as an empty list."
+  [webid]
+  (let [me (auth/web-id)]
+    (if (or (nil? me) (= webid me))
+      []
+      (granted-containers+ webid me))))
+
 (defn- post-sources+
   "Everywhere to read this person's posts from — every registered
-   container and document, plus your own audiences — falling back to our
-   own convention only when nothing at all turns up."
+   container and document, my own audiences if this is me, and anything
+   they have granted me otherwise. Falls back to our own convention only
+   when nothing at all turns up."
   [webid]
   (p/let [{:keys [containers instances]} (registrations+ webid v/as-Note)
           mine (own-audience-containers+ webid)
-          ;; an adopted container is both registered and an audience
-          containers (vec (distinct (concat containers mine)))]
+          granted (granted-to-me+ webid)
+          ;; an adopted container is both registered and an audience, and
+          ;; a public one may also be named in a shared-with document
+          containers (vec (distinct (concat containers mine granted)))]
     (if (or (seq containers) (seq instances))
       {:containers containers :instances instances}
       (p/let [root (pod-root+ webid)]
@@ -282,8 +291,8 @@
    Rejects when the access control resource can't be read, which needs
    control access and so is normal on a pod that isn't yours."
   [url self-webid]
-  (p/let [public (.getPublicAccess ^js universal-access url (opts))
-          agents (.getAgentAccessAll ^js universal-access url (opts))
+  (p/let [public (.getPublicAccess ^js universal-access url (auth/opts))
+          agents (.getAgentAccessAll ^js universal-access url (auth/opts))
           others (when agents
                    (->> (array-seq (js/Object.keys agents))
                         (remove #(= % self-webid))
@@ -299,7 +308,7 @@
    follows, but is logged here so the cause isn't lost behind a
    confusing downstream error."
   [url]
-  (-> (sc/createContainerAt url (opts))
+  (-> (sc/createContainerAt url (auth/opts))
       (p/catch (fn [e]
                  (when-not (#{409 412} (some-> ^js e .-statusCode))
                    (js/console.warn "Couldn't create container" url e))
@@ -402,10 +411,10 @@
   [container]
   (p/let [;; the listing must be current: a post published a moment ago
           ;; has to appear. The posts themselves may be cached.
-          ds (sc/getSolidDataset container (fresh-opts))
+          ds (sc/getSolidDataset container (auth/fresh-opts))
           urls (->> (array-seq (sc/getContainedResourceUrlAll ds))
                     (remove #(str/ends-with? % "/")))
-          datasets (p/all (map #(-> (sc/getSolidDataset % (opts))
+          datasets (p/all (map #(-> (sc/getSolidDataset % (auth/opts))
                                     (p/catch (fn [e]
                                                (js/console.warn
                                                 "Skipping unreadable post" % e)
@@ -423,7 +432,7 @@
   "Posts held directly in one document, for a solid:instance
    registration — which names a document rather than a container."
   [url]
-  (p/let [ds (sc/getSolidDataset url (fresh-opts))]
+  (p/let [ds (sc/getSolidDataset url (auth/fresh-opts))]
     (->> (posts-in-dataset ds)
          (map #(assoc % :source url)))))
 
@@ -496,7 +505,7 @@
    bytes in a local blob: URL suitable for an <img>/<video> src.
    The caller owns the URL and must release-media-url! it when done."
   [url]
-  (p/let [blob (sc/getFile url (opts))]
+  (p/let [blob (sc/getFile url (auth/opts))]
     (js/URL.createObjectURL blob)))
 
 (defn release-media-url!
@@ -575,7 +584,7 @@
                           (sc/addUrl v/solid-forClass v/as-Note)
                           (sc/addUrl v/solid-instanceContainer container))
                   index-url (sc/getSourceUrl ds)
-                  _ (sc/saveSolidDatasetAt index-url (sc/setThing ds reg) (opts))]
+                  _ (sc/saveSolidDatasetAt index-url (sc/setThing ds reg) (auth/opts))]
             ;; the cached copy is now a version behind
             (swap! type-index-cache dissoc webid))))
       ;; genuinely best-effort: publishing where posts live is a courtesy
@@ -627,7 +636,7 @@
                                   (post-thing webid content now media-urls
                                               mention-things))
                      mention-things)
-          saved (sc/saveSolidDatasetAt doc-url ds (opts))]
+          saved (sc/saveSolidDatasetAt doc-url ds (auth/opts))]
     ;; publish where these posts live, once the container definitely exists
     (register-posts-container!+ webid posts-url)
     saved))
@@ -645,7 +654,7 @@
   (-> (p/let [url (contacts-url+ webid)
               ;; rewritten whenever you follow or unfollow someone, so
               ;; never serve this from cache
-              ds (sc/getSolidDataset url (fresh-opts))
+              ds (sc/getSolidDataset url (auth/fresh-opts))
               thing (sc/getThing ds (str url "#me"))]
         (if thing
           (vec (array-seq (sc/getUrlAll thing v/as-following)))
@@ -654,6 +663,150 @@
       ;; anyone. Any other failure must not silently unfollow everyone.
       (p/catch (fn [e]
                  (if (missing? e) [] (p/rejected e))))))
+
+;; ---------------------------------------------------------------------------
+;; What each follower may read
+;;
+;; One small document per follower, granted to them alone, listing the
+;; audience containers they can read. A follower derives its location
+;; from their own WebID, so nothing has to tell them where it is — which
+;; is what keeps notification out of the discovery path. See
+;; docs/following.md.
+;;
+;; Named for its reader rather than hashed: only the owner and that one
+;; follower can ever see the name, so legibility wins. Percent-encoded,
+;; Airlock decodes it back to the plain WebID when browsing.
+;;
+;; The container itself must NEVER be granted read — only the files in
+;; it. Granting on the container would hand every follower the complete
+;; list of everyone else who follows you.
+
+(defn- shared-with-dir+ [owner]
+  (p/let [root (pod-root+ owner)]
+    (str root app-path "shared-with/")))
+
+(defn follower-filename
+  "The name of the document recording what one follower may read.
+
+   Both sides derive this from the same WebID, so it has to agree
+   exactly — which is why WebIDs are never normalised. Percent encoding
+   makes a URL usable as a path segment while staying legible: Airlock's
+   entry-name decodes it back for display."
+  [follower]
+  (str (js/encodeURIComponent follower) ".ttl"))
+
+(defn filename->follower
+  "The WebID a shared-with document is for, from its URL — the inverse of
+   follower-filename, used to read the follower list back out of the
+   container listing."
+  [url]
+  (-> url
+      (str/split #"/")
+      last
+      (str/replace #"\.ttl$" "")
+      js/decodeURIComponent))
+
+(defn- shared-with-url+ [owner follower]
+  (p/let [dir (shared-with-dir+ owner)]
+    (str dir (follower-filename follower))))
+
+(defn granted-containers+
+  "Which of `owner`'s audience containers `follower` may read, according
+   to the document the owner wrote for them.
+
+   Empty when there is no such document — which is the normal state for
+   someone who hasn't been granted anything, and indistinguishable from
+   being refused. Both mean 'nothing for you here', so neither is an
+   error."
+  [owner follower]
+  (-> (p/let [url (shared-with-url+ owner follower)
+              ;; rewritten on every grant and revoke, so never cached
+              ds (sc/getSolidDataset url (auth/fresh-opts))
+              thing (sc/getThing ds url)]
+        (if thing
+          (vec (array-seq (sc/getUrlAll thing v/solid-instanceContainer)))
+          []))
+      (p/catch (fn [_] []))))
+
+(defn- write-shared-with+
+  "Record what one follower may read, and make sure they can read the
+   record. An empty list deletes the document rather than leaving an
+   empty one behind: revocation should look the same as never having
+   been granted, and to the person refused it does — a missing resource
+   and a forbidden one come back identically."
+  [owner follower containers]
+  (p/let [url (shared-with-url+ owner follower)]
+    (if (empty? containers)
+      (-> (sc/deleteSolidDataset url (auth/opts))
+          (p/catch (fn [e]
+                     ;; already gone is the desired state
+                     (when-not (missing? e)
+                       (js/console.warn "Couldn't remove" url e))
+                     nil)))
+      (p/let [existing (-> (sc/getSolidDataset url (auth/fresh-opts))
+                           (p/catch (fn [e] (if (missing? e) nil (p/rejected e)))))
+              base (or existing (sc/createSolidDataset))
+              ;; replace rather than amend: this is the whole list
+              cleared (cond-> base existing (sc/removeThing url))
+              thing (reduce (fn [th c] (sc/addUrl th v/solid-instanceContainer c))
+                            (sc/createThing #js {:url url})
+                            containers)
+              _ (sc/saveSolidDatasetAt url (sc/setThing cleared thing) (auth/opts))]
+        ;; the document is no use to them if they can't read it
+        (access/set-agent-access+ url follower {:read true})))))
+
+(defn followers+
+  "Everyone this person has granted an audience to, as
+   [{:webid :containers}].
+
+   Read from the shared-with container itself: one document per
+   follower, named after them. That listing *is* the record, so there is
+   no separate roster to keep in step with the grants."
+  [owner]
+  (-> (p/let [dir (shared-with-dir+ owner)
+              ds (sc/getSolidDataset dir (auth/fresh-opts))
+              urls (->> (array-seq (sc/getContainedResourceUrlAll ds))
+                        (remove #(str/ends-with? % "/")))
+              entries (p/all
+                       (map (fn [url]
+                              (let [follower (filename->follower url)]
+                                (p/let [containers (granted-containers+ owner follower)]
+                                  {:webid follower :containers containers})))
+                            urls))]
+        (vec (sort-by :webid entries)))
+      ;; no shared-with container yet means you have granted nobody
+      (p/catch (fn [e]
+                 (when-not (missing? e)
+                   (js/console.warn "Couldn't read your followers" e))
+                 []))))
+
+(defn grant-follower+
+  "Let one person read one audience: access on the container, access
+   inherited by its contents, and a line in their shared-with document
+   so they can find it.
+
+   Read only, never control. Three writes, and the third is what makes
+   the first two discoverable — a grant nobody can find does nothing."
+  [owner follower container]
+  (p/let [_ (access/set-agent-access+ container follower {:read true})
+          _ (access/set-inherited-access+ container follower {:read true})
+          existing (granted-containers+ owner follower)
+          containers (vec (distinct (conj (vec existing) container)))
+          _ (write-shared-with+ owner follower containers)]
+    containers))
+
+(defn revoke-follower+
+  "Take one audience back from one person. Their shared-with document
+   loses that container, and is deleted entirely if it was the last."
+  [owner follower container]
+  (p/let [_ (access/set-agent-access+ container follower
+                                     {:read false :append false :write false})
+          _ (access/set-inherited-access+ container follower
+                                          {:read false :append false :write false})
+          existing (granted-containers+ owner follower)
+          containers (vec (remove #{container} existing))
+          _ (write-shared-with+ owner follower containers)]
+    containers))
 
 (defn- audiences-url+ [webid]
   (p/let [root (pod-root+ webid)]
@@ -717,7 +870,7 @@
   (-> (p/let [url (audiences-url+ webid)
               ;; rewritten whenever an audience is added or renamed, so
               ;; never serve this from cache
-              ds (sc/getSolidDataset url (fresh-opts))]
+              ds (sc/getSolidDataset url (auth/fresh-opts))]
         (->> (array-seq (sc/getThingAll ds))
              (keep thing->audience)
              vec))
@@ -737,7 +890,7 @@
    renaming one would leave both names behind."
   [webid audiences]
   (p/let [url (audiences-url+ webid)
-          existing (-> (sc/getSolidDataset url (fresh-opts))
+          existing (-> (sc/getSolidDataset url (auth/fresh-opts))
                        (p/catch (fn [e] (if (missing? e) nil (p/rejected e)))))
           base (or existing (sc/createSolidDataset))
           cleared (reduce (fn [ds thing]
@@ -752,7 +905,7 @@
                                            (sc/addUrl v/solid-instanceContainer container))))
                      cleared
                      audiences)]
-    (sc/saveSolidDatasetAt url ds (opts))
+    (sc/saveSolidDatasetAt url ds (auth/opts))
     audiences))
 
 (defn create-audience+
@@ -825,7 +978,7 @@
    <#me>."
   [webid contact-webids]
   (p/let [url (contacts-url+ webid)
-          existing (-> (sc/getSolidDataset url (fresh-opts))
+          existing (-> (sc/getSolidDataset url (auth/fresh-opts))
                        ;; no document yet is the normal state before you
                        ;; follow anyone; anything else is a real failure
                        ;; and must not be papered over with a create
@@ -836,4 +989,4 @@
           ds (-> (or existing (sc/createSolidDataset))
                  (cond-> existing (sc/removeThing (str url "#me")))
                  (sc/setThing thing))]
-    (sc/saveSolidDatasetAt url ds (opts))))
+    (sc/saveSolidDatasetAt url ds (auth/opts))))

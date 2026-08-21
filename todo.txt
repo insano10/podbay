@@ -1,3 +1,4 @@
+- test revoke followers
 - make adding connection work in feed <- in progress, see following.md for design plan
  - ensure it is obvious for a first time user what steps to follow
     - how do you easily enter a webId
@@ -18,7 +19,10 @@
  - rename comms to so.fee?
 - can we do groups with permissions? seems extreme to list all friends on a container
 - make 502 handling better (error message too vague, spinners and more retries)
+- move follow/audience settings to a separate tab, it's a bit messy
+- add more confirmation popups for activities like revoking access and deleting audiences
 - accessibility features
+- wizard in comms to ensure your pod has the correct setup to use it
 - pod hygiene app
  - checks for what data is where, type declarations and ACLs
  - extended profile shenanigans
