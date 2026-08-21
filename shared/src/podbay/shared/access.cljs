@@ -11,7 +11,8 @@
    file-browser work; Comms only ever needs to write."
   (:require ["@inrupt/solid-client" :as sc]
             [promesa.core :as p]
-            [podbay.shared.auth :as auth]))
+            [podbay.shared.auth :as auth]
+            [podbay.shared.vocab :as sv]))
 
 (def ^:private universal-access sc/universalAccess)
 
@@ -99,11 +100,92 @@
    as a side effect of sharing it."
   [[:read "read"] [:append "append"] [:write "write"]])
 
-(defn- public?
-  "Is this change about everyone, rather than one named person? The
-   subject of a grant is either a WebID or the keyword :public."
-  [subject]
-  (= :public subject))
+;; A grant's subject is one of three things: a WebID, :public (everyone,
+;; signed in or not), or :authenticated (anyone holding a WebID at all).
+;;
+;; That middle tier is the useful one for an inbox — you need an identity
+;; to write, which deters junk without admitting the whole web — and it
+;; is the one solid-client does not cover. ACP exposes it
+;; (setAuthenticated on a matcher); WAC has no helper for agent classes
+;; whatsoever, so the authorisation below is built by hand.
+
+(defn- named? [subject] (string? subject))
+(defn- public? [subject] (= :public subject))
+(defn- authenticated? [subject] (= :authenticated subject))
+
+(def ^:private acl-ns "http://www.w3.org/ns/auth/acl#")
+(def ^:private acl-Authorization (str acl-ns "Authorization"))
+(def ^:private acl-agentClass (str acl-ns "agentClass"))
+(def ^:private acl-AuthenticatedAgent (str acl-ns "AuthenticatedAgent"))
+(def ^:private acl-accessTo (str acl-ns "accessTo"))
+(def ^:private acl-default (str acl-ns "default"))
+(def ^:private acl-mode (str acl-ns "mode"))
+
+(def ^:private acl-modes
+  {:read (str acl-ns "Read")
+   :append (str acl-ns "Append")
+   :write (str acl-ns "Write")})
+
+(defn- wac-authenticated-rule
+  "The one authorisation granting `modes` to anyone signed in.
+
+   Written by hand because solid-client has no notion of an agent
+   class: its ACL helpers cover a named agent, a group and the public,
+   and nothing else. So this constructs the Thing directly.
+
+   `acl:accessTo` names the resource; `acl:default` is added for a
+   container, which is how WAC expresses 'and the things inside it'. A
+   fixed subject name (#podbay-authenticated) so a later change edits
+   this rule rather than accumulating another beside it."
+  [url modes container?]
+  (let [granted (keep (fn [[k iri]] (when (get modes k) iri)) acl-modes)]
+    (when (seq granted)
+      (reduce (fn [th iri] (sc/addUrl th acl-mode iri))
+              (cond-> (-> (sc/createThing #js {:name "podbay-authenticated"})
+                          (sc/addUrl sv/rdf-type acl-Authorization)
+                          (sc/addUrl acl-agentClass acl-AuthenticatedAgent)
+                          (sc/addUrl acl-accessTo url))
+                container? (sc/addUrl acl-default url))
+              granted))))
+
+(defn- wac-authenticated-access+
+  "WAC: grant or clear the authenticated-agent authorisation on one
+   resource. Granting nothing removes the rule rather than leaving an
+   authorisation with no modes, which would be an authorisation that
+   authorises nothing."
+  [url access]
+  (p/let [ds (sc/getSolidDatasetWithAcl url (auth/fresh-opts))
+          acl (or (sc/getResourceAcl ds)
+                  ;; as elsewhere: seed from the fallback so creating an
+                  ;; ACL doesn't silently drop the rules it inherited
+                  (if (sc/hasFallbackAcl ds)
+                    (sc/createAclFromFallbackAcl ds)
+                    (sc/createAcl ds)))
+          ;; no acl:default: this sets the resource's own access, and
+          ;; whether it reaches the contents is the caller's decision,
+          ;; taken in set-authenticated!. Deriving it from the URL shape
+          ;; here would make WAC propagate while ACP didn't.
+          rule (wac-authenticated-rule url access false)
+          subject (str (sc/getSourceUrl acl) "#podbay-authenticated")
+          updated (if rule
+                    (sc/setThing acl rule)
+                    (sc/removeThing acl subject))]
+    (sc/saveAclFor ds updated (auth/opts))))
+
+(defn wac-authenticated-modes
+  "What the authenticated-agent authorisation on this ACL grants, as
+   {:read :append :write}. Read by hand for the same reason it's written
+   by hand."
+  [acl url]
+  (let [rules (->> (array-seq (sc/getThingAll acl))
+                   (filter #(some #{acl-AuthenticatedAgent}
+                                  (array-seq (sc/getUrlAll % acl-agentClass))))
+                   ;; only rules that actually apply to this resource
+                   (filter #(some #{url}
+                                  (concat (array-seq (sc/getUrlAll % acl-accessTo))
+                                          (array-seq (sc/getUrlAll % acl-default))))))
+        granted (set (mapcat #(array-seq (sc/getUrlAll % acl-mode)) rules))]
+    (into {} (map (fn [[k iri]] [k (contains? granted iri)])) acl-modes)))
 
 (defn- wac-default-access+
   "WAC: an acl:default authorisation on the container, which is what its
@@ -122,17 +204,27 @@
                     (sc/createAcl ds)))
           ;; the setters replace all four modes at once, so the ones not
           ;; being changed have to be read back first
-          current (js->clj (or (if (public? subject)
-                                 (sc/getPublicDefaultAccess acl)
-                                 (sc/getAgentDefaultAccess acl subject))
-                               #js {})
-                           :keywordize-keys true)
+          current (if (authenticated? subject)
+                    (wac-authenticated-modes acl url)
+                    (js->clj (or (if (public? subject)
+                                   (sc/getPublicDefaultAccess acl)
+                                   (sc/getAgentDefaultAccess acl subject))
+                                 #js {})
+                             :keywordize-keys true))
           merged (merge {:read false :append false :write false :control false}
                         current
                         (select-keys access [:read :append :write :control]))
-          updated (if (public? subject)
-                    (sc/setPublicDefaultAccess acl (clj->js merged))
-                    (sc/setAgentDefaultAccess acl subject (clj->js merged)))]
+          updated (cond
+                    ;; the hand-built rule already carries acl:default
+                    ;; for a container, so it covers both at once
+                    (authenticated? subject)
+                    (let [rule (wac-authenticated-rule url merged true)]
+                      (if rule
+                        (sc/setThing acl rule)
+                        (sc/removeThing acl (str (sc/getSourceUrl acl)
+                                                 "#podbay-authenticated"))))
+                    (public? subject) (sc/setPublicDefaultAccess acl (clj->js merged))
+                    :else (sc/setAgentDefaultAccess acl subject (clj->js merged)))]
     (sc/saveAclFor ds updated (auth/opts))))
 
 (defn- acp-member-mode
@@ -166,31 +258,43 @@
   (let [agent-name (str "podbay-member-" mode "-matcher")
         public-name (str "podbay-member-" mode "-public-matcher")
         policy-name (str "podbay-member-" mode "-policy")
+        auth-name (str "podbay-member-" mode "-authenticated-matcher")
         agent-m (or (.getResourceMatcher acp resource agent-name)
                     (.createResourceMatcherFor acp resource agent-name))
         public-m (or (.getResourceMatcher acp resource public-name)
                      (.createResourceMatcherFor acp resource public-name))
+        auth-m (or (.getResourceMatcher acp resource auth-name)
+                   (.createResourceMatcherFor acp resource auth-name))
         ;; only the matcher this subject belongs to changes; the other is
         ;; carried through untouched so a public grant can't disturb the
         ;; people already named, or the reverse
-        [agent-m public-m]
-        (if (public? subject)
-          ;; setPublic is addIri, so calling it twice writes the sentinel
-        ;; twice — the same trap addAgent has
-        [agent-m (cond
+        ;; only the matcher this subject belongs to changes; the other
+        ;; two are carried through untouched, so granting the public
+        ;; can't disturb the people already named, or the reverse
+        agent-m (if (named? subject)
+                  ;; addAgent appends unconditionally, so granting twice
+                  ;; would list the same person twice — harmless to
+                  ;; evaluate, but the ACR grows on every re-share
+                  (cond
+                    (not allow?) (.removeAgent acp agent-m subject)
+                    (some #{subject} (array-seq (.getAgentAll acp agent-m))) agent-m
+                    :else (.addAgent acp agent-m subject))
+                  agent-m)
+        public-m (if (public? subject)
+                   (cond
                      (not allow?) (.removePublic acp public-m)
                      (.hasPublic acp public-m) public-m
-                     :else (.setPublic acp public-m))]
-          ;; addAgent appends unconditionally, so granting twice would
-          ;; list the same person twice — harmless to evaluate, but the
-          ;; access control resource grows every time anyone re-shares
-          [(cond
-             (not allow?) (.removeAgent acp agent-m subject)
-             (some #{subject} (array-seq (.getAgentAll acp agent-m))) agent-m
-             :else (.addAgent acp agent-m subject))
-           public-m])
+                     :else (.setPublic acp public-m))
+                   public-m)
+        auth-m (if (authenticated? subject)
+                 (cond
+                   (not allow?) (.removeAuthenticated acp auth-m)
+                   (.hasAuthenticated acp auth-m) auth-m
+                   :else (.setAuthenticated acp auth-m))
+                 auth-m)
         resource (->> agent-m (.setResourceMatcher acp resource))
         resource (->> public-m (.setResourceMatcher acp resource))
+        resource (->> auth-m (.setResourceMatcher acp resource))
         ;; A matcher constraining nothing must never be linked: an anyOf
         ;; naming an empty matcher is a rule with nothing to test, and
         ;; the safe reading of that is not the one to gamble a pod on.
@@ -198,7 +302,9 @@
                (seq (array-seq (.getAgentAll acp agent-m)))
                (conj (sc/asUrl agent-m))
                (.hasPublic acp public-m)
-               (conj (sc/asUrl public-m)))
+               (conj (sc/asUrl public-m))
+               (.hasAuthenticated acp auth-m)
+               (conj (sc/asUrl auth-m)))
         ;; Built from scratch every time rather than read and amended.
         ;; The policy's whole content is one mode and its matchers, so
         ;; stating it outright is both simpler and idempotent —
@@ -249,6 +355,73 @@
                             inheritable-modes)]
         (p/let [_ (.saveAcrFor acp updated (auth/opts))]
           {:mechanism :acp :acr-url acr-url})))))
+
+(defn- acp-authenticated-resource+
+  "ACP: grant or clear the authenticated class on the resource itself.
+
+   Separate from acp-member-mode, which links its policy as a *member*
+   policy — this one governs the resource, so it links with
+   addPolicyUrl. universalAccess would do this for an agent or the
+   public and has no notion of an agent class, which is why it's here."
+  [url access]
+  (p/let [resource (.getSolidDatasetWithAcr acp url (auth/fresh-opts))]
+    (if-not (.hasAccessibleAcr acp resource)
+      (p/rejected (js/Error. (str "This pod uses ACP but won't let us read the "
+                                  "access control resource for " url)))
+      (p/let [updated
+              (reduce
+               (fn [res [k mode]]
+                 (if-not (contains? access k)
+                   res
+                   (let [allow? (get access k)
+                         m-name (str "podbay-" mode "-authenticated-matcher")
+                         p-name (str "podbay-" mode "-authenticated-policy")
+                         m (or (.getResourceMatcher acp res m-name)
+                               (.createResourceMatcherFor acp res m-name))
+                         m (cond
+                             (not allow?) (.removeAuthenticated acp m)
+                             (.hasAuthenticated acp m) m
+                             :else (.setAuthenticated acp m))
+                         res (.setResourceMatcher acp res m)
+                         live? (.hasAuthenticated acp m)
+                         policy (-> (.createResourcePolicyFor acp res p-name)
+                                    (as-> pol
+                                        (.setAllowModes
+                                         acp pol
+                                         #js {:read (boolean (and live? (= mode "read")))
+                                              :append (boolean (and live? (= mode "append")))
+                                              :write (boolean (and live? (= mode "write")))
+                                              :controlRead false
+                                              :controlWrite false}))
+                                    (as-> pol
+                                        (if live?
+                                          (.addAnyOfMatcherUrl acp pol (sc/asUrl m))
+                                          pol)))
+                         p-url (sc/asUrl policy)
+                         res (.setResourcePolicy acp res policy)]
+                     (if live?
+                       (cond-> res
+                         (not (some #{p-url} (array-seq (.getPolicyUrlAll acp res))))
+                         (as-> r (.addPolicyUrl acp r p-url)))
+                       (.removePolicyUrl acp res p-url)))))
+               resource
+               inheritable-modes)]
+        (.saveAcrFor acp updated (auth/opts))
+        {:mechanism :acp}))))
+
+(defn set-authenticated-access+
+  "What anyone holding a WebID may do with this resource — the tier
+   between one named person and the whole web.
+
+   Neither server's universal API reaches it: ACP has setAuthenticated
+   on a matcher, WAC has nothing for agent classes at all. So this
+   branches, asking the pod which system it is rather than being told."
+  [url access]
+  (p/let [acp? (.isAcpControlled acp url (auth/opts))]
+    (if acp?
+      (acp-authenticated-resource+ url access)
+      (p/let [_ (wac-authenticated-access+ url access)]
+        {:mechanism :wac}))))
 
 (defn set-inherited-access+
   "Set what `subject` — a WebID, or :public for everyone — may do with

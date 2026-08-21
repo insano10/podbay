@@ -30,6 +30,7 @@
            :follower-busy? false
            :requests []          ; as:Follow entries sitting in your inbox
            :request-notice nil   ; what happened when you asked to follow
+           :own-inbox nil        ; {:status :checking|:present|:absent}
            :apps {}              ; client id url -> the app's own name
            :loading-timeline? false
            :posting? false
@@ -143,6 +144,7 @@
 (declare load-destinations!)
 (declare load-followers!)
 (declare load-requests!)
+(declare check-own-inbox!)
 
 (defn refresh-timeline!
   "Reload posts from the user's own pod and every contact's pod,
@@ -400,6 +402,23 @@
                    (swap! db assoc :followers-status :failed
                                    :follower-busy? false))))))
 
+(defn check-own-inbox!
+  "Whether this pod advertises an inbox, so follow requests can reach
+   you at all. Read once per session; it only changes if you go and set
+   one up."
+  []
+  (when-let [webid (:webid @db)]
+    (swap! db assoc :own-inbox {:status :checking})
+    (-> (pod/inbox-url+ webid)
+        (p/then (fn [url]
+                  (swap! db assoc :own-inbox
+                         (if url
+                           {:status :present :url url}
+                           {:status :absent}))))
+        ;; not knowing is different from not having one, and neither is
+        ;; worth an error banner over
+        (p/catch (fn [_] (swap! db assoc :own-inbox nil))))))
+
 (defn load-requests!
   "Follow requests waiting in your inbox. Silent when you have no
    inbox — plenty of pods don't, and it isn't a fault."
@@ -496,6 +515,7 @@
              ;; there is absent until something else happens to refresh.
              (load-followers!)
              (load-requests!)
+             (check-own-inbox!)
              ;; Your own posts and your contact list are independent, and
              ;; on a slow pod every round trip is seconds — so start both
              ;; at once rather than making the timeline wait on the contacts

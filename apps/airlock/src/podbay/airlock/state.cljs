@@ -411,6 +411,52 @@
                   (cond-> {:read false :append false :write false}
                     (not (revoking-self? webid)) (assoc :control false)))))
 
+(defn set-authenticated!
+  "Change what anyone signed in with a WebID may do here — the tier
+   between one named person and the whole web.
+
+   **This one does not reach a container's contents**, unlike an agent
+   or public grant. The case the tier exists for is an inbox: Append on
+   the container is what lets someone POST a message, while Append on
+   the *contents* would let a signed-in stranger add triples to
+   somebody else's message already sitting there. Not read it — append
+   only — so the risk is pollution rather than disclosure, and it's
+   further blunted by their not being able to list the container. But it
+   is access nobody asked for, and a grant should be no wider than the
+   sentence the user clicked.
+
+   The cost of that choice: 'anyone signed in may read this folder and
+   its files' isn't expressible. Nothing wants it today, and adding the
+   same 'and everything inside it' checkbox the agent grant has would
+   restore it if anything does.
+
+   Not propagating is enforced rather than merely omitted: any inherited
+   rule for this tier is actively cleared. An earlier version did
+   propagate, so a container set up with it carries a member policy this
+   app would otherwise be unable to remove — the app wrote it, so the
+   app should be able to take it away."
+  [access]
+  (when-let [url (:url (:access @db))]
+    (swap! db assoc :access-busy? true :error nil :inherited nil)
+    (-> (pod/set-authenticated-access+ url access)
+        (p/then (fn [_]
+                  (when (container-url? url)
+                    ;; best-effort: clearing a rule that was never there
+                    ;; is a no-op, and failing to must not fail the grant
+                    (-> (pod/set-inherited-access+
+                         url :authenticated
+                         {:read false :append false :write false})
+                        (p/catch (fn [e]
+                                   (js/console.warn
+                                    "Couldn't clear inherited access for
+                                     signed-in people" e)
+                                   nil))))))
+        (p/then (fn [_] (after-access-change! url nil false)))
+        (p/catch (fn [e]
+                   (swap! db assoc :access-busy? false)
+                   (set-error! (describe "Couldn't change access for signed-in
+                                          people" e)))))))
+
 (defn set-public!
   "Change what everyone — including people who aren't signed in — can do.
 

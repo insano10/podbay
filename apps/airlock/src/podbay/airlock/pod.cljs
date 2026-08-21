@@ -240,6 +240,10 @@
           (for [webid (array-seq (js/Object.keys all))]
             [webid (wac-access->map (aget all webid))]))))
 
+;; Defined further down, beside the other hand-rolled ACP readers — the
+;; vocabulary it walks is declared there.
+(declare authenticated-access+)
+
 (defn access+
   "Rules set **on this resource**, as {:public {…} :agents {webid {…}}}.
 
@@ -263,26 +267,32 @@
   ;; the very thing being read, so it must revalidate — a cached access
   ;; control resource would report the rules as they were, which reads as
   ;; "the change didn't work"
-  (p/let [acp? (.isAcpControlled acp url (auth/opts))]
+  (p/let [acp? (.isAcpControlled acp url (auth/opts))
+          ;; the agent-class tier, which no universal call reports
+          authenticated (authenticated-access+ url)]
     (if acp?
       (p/let [public (.getPublicAccess ^js universal-access url (auth/fresh-opts))
               agents (.getAgentAccessAll ^js universal-access url (auth/fresh-opts))]
         {:public (access->map public)
+         :authenticated authenticated
          :agents (agents->map agents)})
       (p/let [ds (sc/getSolidDatasetWithAcl url (auth/fresh-opts))]
         (if-let [acl (sc/getResourceAcl ds)]
           {:public (wac-access->map (sc/getPublicResourceAccess acl))
+           :authenticated authenticated
            :agents (wac-agents->map (sc/getAgentResourceAccessAll acl))}
           ;; no ACL of its own is an answer, not a silence: nothing is
           ;; set here, and everything this resource allows is inherited
           {:public {:read false :append false :write false
                     :control-read false :control-write false}
+           :authenticated nil
            :agents {}})))))
 
 ;; Writing access is shared with Comms; re-exported here so this app's
 ;; state layer keeps talking to one namespace about pods.
 (def set-agent-access+ access/set-agent-access+)
 (def set-public-access+ access/set-public-access+)
+(def set-authenticated-access+ access/set-authenticated-access+)
 (def set-inherited-access+ access/set-inherited-access+)
 
 (defn agent-access+
@@ -308,12 +318,58 @@
 (def ^:private acp-anyOf (str acp-ns "anyOf"))
 (def ^:private acp-allOf (str acp-ns "allOf"))
 (def ^:private acp-agent (str acp-ns "agent"))
+(def ^:private acp-accessControl (str acp-ns "accessControl"))
+(def ^:private acp-AuthenticatedAgent (str acp-ns "AuthenticatedAgent"))
 
 ;; ACP borrows WAC's vocabulary for the access modes themselves
 (def ^:private acl-ns "http://www.w3.org/ns/auth/acl#")
 (def ^:private mode-keys {(str acl-ns "Read") :read
                           (str acl-ns "Append") :append
                           (str acl-ns "Write") :write})
+
+(defn- authenticated-access+
+  "What anyone signed in may do with this resource.
+
+   Read here rather than through the access API, which has no notion of
+   an agent class: on ACP that means walking the ACR for a matcher
+   carrying the AuthenticatedAgent sentinel, and on WAC finding an
+   authorisation whose acl:agentClass is acl:AuthenticatedAgent.
+
+   Offering to grant something the pane couldn't then display would be
+   worse than not offering it, so this exists to keep the two halves
+   honest."
+  [url]
+  (-> (p/let [acp? (.isAcpControlled acp url (auth/opts))]
+        (if acp?
+          (p/let [info (.getResourceInfoWithAcr acp url (auth/fresh-opts))]
+            (when (.hasAccessibleAcr acp info)
+              (p/let [acr-url (.getLinkedAcrUrl acp info)
+                      acr (sc/getSolidDataset acr-url (auth/fresh-opts))]
+                ;; every policy the resource applies, not its members
+                (let [applies (->> (array-seq (sc/getThingAll acr))
+                                   (mapcat #(array-seq
+                                             (sc/getUrlAll % acp-accessControl)))
+                                   distinct
+                                   (keep #(sc/getThing acr %))
+                                   (mapcat #(array-seq (sc/getUrlAll % acp-apply)))
+                                   (keep #(sc/getThing acr %)))]
+                  (->> applies
+                       (filter (fn [policy]
+                                 (->> (array-seq (sc/getUrlAll policy acp-anyOf))
+                                      (keep #(sc/getThing acr %))
+                                      (some (fn [m]
+                                              (some #{acp-AuthenticatedAgent}
+                                                    (array-seq
+                                                     (sc/getUrlAll m acp-agent))))))))
+                       (mapcat #(array-seq (sc/getUrlAll % acp-allow)))
+                       (keep mode-keys)
+                       (into {} (map (fn [k] [k true]))))))))
+          (p/let [ds (sc/getSolidDatasetWithAcl url (auth/fresh-opts))]
+            (when-let [acl (sc/getResourceAcl ds)]
+              (access/wac-authenticated-modes acl url)))))
+      (p/catch (fn [e]
+                 (js/console.warn "Couldn't read authenticated access for" url e)
+                 nil))))
 
 (defn- policy-grants
   "One policy as {subject {:read true …}}, or nil if it grants nothing.

@@ -680,10 +680,16 @@
 (defn inbox-url+
   "Where to leave this person a notification, or nil if they don't
    advertise one. Not an error: plenty of pods have no inbox, and ESS
-   doesn't create one."
+   doesn't create one.
+
+   Looks in the extended profile as well as the WebID document, via
+   profile-url+ — the same reason the type index does. On ESS the WebID
+   document is the provider's and minimal; the only profile its owner
+   can write is the one linked by rdfs:seeAlso. Reading only the WebID
+   document would mean an ESS user could add ldp:inbox to the one
+   document they control and still not be findable."
   [webid]
-  (-> (p/let [thing (profile-thing+ webid)]
-        (when thing (sc/getUrl thing sv/ldp-inbox)))
+  (-> (profile-url+ webid sv/ldp-inbox)
       (p/catch (fn [_] nil))))
 
 (defn request-follow+

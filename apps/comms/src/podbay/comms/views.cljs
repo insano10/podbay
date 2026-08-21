@@ -418,6 +418,50 @@
        [:button.subtle {:on-click state/dismiss-notice!
                         :title "Dismiss"} "✕"]])))
 
+(defn- no-inbox-panel
+  "Shown when this pod advertises no inbox, so follow requests can't
+   reach you.
+
+   Informational only. An inbox is a container other people may append
+   to, and adding a write surface to someone's pod is not something an
+   app should do on their behalf — so this says what's missing, what it
+   would cost, and where to do it, and stops."
+  []
+  (when (= :absent (:status (:own-inbox @state/db)))
+    [:div.no-inbox
+     [:h3 "Nobody can send you a follow request"]
+     [:p
+      "Your pod doesn't advertise an inbox, so when someone follows you
+       there's nowhere for them to leave a request. Nothing is broken:
+       they can still read whatever you've made public, and you can
+       still give them access here by pasting their WebID. You just
+       won't be told they'd like it."]
+     [:p.hint
+      "An inbox is a container others may "
+      [:strong "append"] " to. Append is not read — someone can leave a
+       message and cannot read your inbox or anyone else's. Comms won't
+       create one for you: it's a new way for strangers to write to your
+       pod, and that's your decision rather than an app's."]
+     [:details
+      [:summary "How to set one up"]
+      [:ol
+       [:li "In " [:a {:href "../airlock/" :target "_blank" :rel "noopener"}
+                   "Airlock"] ", create a container — " [:code "inbox/"]
+        " at the top of your pod is the convention."]
+       [:li "Open it, and in Sharing tick "
+        [:strong "\"Anyone signed in may add to this\""] ". That grants "
+        [:code "Append"] " to anyone holding a WebID: they can leave a
+         message and cannot read the inbox or each other's. Needing an
+         identity to write is what deters junk without admitting the
+         whole web."]
+       [:li "Add " [:code "ldp:inbox <inbox/>"] " to your profile
+             document, so apps can find it. That one's a hand edit —
+             Airlock's editor will do it."]]
+      [:p.hint
+       "Don't make it publicly writable. The difference between "
+       [:em "anyone signed in"] " and " [:em "anyone at all"] " is the
+        difference between junk you can attribute and junk you can't."]]]))
+
 (defn followers-panel
   "Who can read your posts, and the one place to change it.
 
@@ -777,7 +821,10 @@
           [audiences-panel]
           [request-notice]
           [followers-panel]
-          [contacts-panel]]
+          [contacts-panel]
+          ;; last: it's a standing condition, not something that just
+          ;; happened, so it shouldn't push the panels down
+          [no-inbox-panel]]
          [:<>
           [composer]
           [timeline]])])))

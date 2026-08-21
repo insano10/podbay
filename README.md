@@ -262,6 +262,49 @@ What it does today:
   combination can't be constructed — solid-client *throws* on a WAC pod
   if the two differ, which would otherwise be a change that works
   against ESS and fails against CSS.
+- **Three tiers of subject, not two.** A grant goes to a named person,
+  to **anyone signed in with a WebID**, or to the public. That middle
+  tier is what an inbox needs — `Append` for anyone with an identity
+  lets people leave you a message while needing an identity to do it,
+  which deters junk without admitting the whole web. Append is also not
+  Read, so a writable inbox is not a readable one.
+
+  Neither server's universal API reaches it, and the two are unequal
+  about how far short they fall. ACP has `setAuthenticated` on a
+  matcher, so that half is ordinary. **WAC has no notion of an agent
+  class at all** — solid-client's ACL helpers cover a named agent, a
+  group and the public, and nothing else — so the authorisation is
+  built by hand:
+
+  ```turtle
+  <#podbay-authenticated>
+      a acl:Authorization ;
+      acl:agentClass acl:AuthenticatedAgent ;
+      acl:accessTo <inbox/> ;
+      acl:mode acl:Append .
+  ```
+
+  **This tier deliberately does not reach a container's contents**,
+  unlike an agent or public grant, and the non-propagation is enforced
+  rather than merely omitted — any inherited rule for it is actively
+  cleared, because an earlier version did propagate and the app should
+  be able to remove what it wrote. Append on the container is what lets
+  someone POST a message; Append on the *contents* would let a
+  signed-in stranger add triples to somebody else's message already
+  there. Not read it, so the risk is pollution rather than disclosure,
+  and it is blunted further by their being unable to list the container
+  — but it is access nobody asked for.
+
+  The cost: "anyone signed in may read this folder and its files" isn't
+  expressible. Nothing wants it today, and the agent grant's "and
+  everything inside it" checkbox would restore it if anything does.
+
+  Reading it back is hand-rolled too, and has to be: offering to grant
+  something the pane then couldn't display would be worse than not
+  offering it. A fixed subject name means a later change edits that rule
+  rather than accumulating another beside it, and granting *nothing*
+  removes the rule instead of leaving an authorisation that authorises
+  nothing.
 - **A grant on a container also covers its contents**, which takes two
   writes and two different APIs. `universalAccess` is explicit that it
   won't do this: *"if the Resource is a Container, the configured Access

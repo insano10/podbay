@@ -332,9 +332,10 @@ Note: Losing this permission means losing the ability to grant it back."]])
                [agent-grants agents])])])])))
 
 (defn- sharing-pane []
-  (let [{:keys [status public agents message url]} (:access @state/db)
+  (let [{:keys [status public authenticated agents message url]} (:access @state/db)
         busy? (:access-busy? @state/db)
-        public-read? (boolean (:read public))]
+        public-read? (boolean (:read public))
+        auth-append? (boolean (:append authenticated))]
     [:div.sharing
      [:h2 "Sharing"]
      (case status
@@ -373,6 +374,25 @@ Note: Losing this permission means losing the ability to grant it back."]])
                                  ;; irreversible thing here — confirm it
                                  (state/ask-public! {:read true})))}]
          "Readable by anyone"]
+
+        ;; The tier between one person and the whole web. Neither
+        ;; server's universal API reaches it — ACP has setAuthenticated,
+        ;; WAC has nothing for agent classes — so both halves are
+        ;; written here by hand. Its reason for existing is an inbox:
+        ;; needing a WebID to write deters junk without admitting
+        ;; everyone.
+        [:dl
+         [:dt "Anyone signed in"]
+         [:dd (if authenticated
+                [modes-granted authenticated]
+                [:span.unreported "not reported by this server"])]]
+        [:label.public-toggle
+         [:input {:type "checkbox"
+                  :checked auth-append?
+                  :disabled busy?
+                  :on-change #(state/set-authenticated!
+                               {:append (not auth-append?)})}]
+         "Anyone signed in may add to this"]
 
         (if (seq agents)
           [:dl

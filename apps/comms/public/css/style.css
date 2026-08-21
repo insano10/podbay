@@ -303,6 +303,28 @@ input, textarea {
   border-top: 1px solid var(--border);
 }
 
+/* a standing condition rather than an alert: this pod has no inbox, so
+   follow requests can't reach it. Informational styling deliberately —
+   nothing is broken and nothing needs doing today. */
+.no-inbox {
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-left: 3px solid var(--accent);
+  border-radius: 0.5rem;
+  padding: 0.75rem 1rem;
+  margin-bottom: 1.5rem;
+  font-size: 0.9rem;
+}
+.no-inbox h3 { font-size: 0.95rem; margin: 0 0 0.4rem; }
+.no-inbox p { margin: 0 0 0.5rem; }
+.no-inbox summary { cursor: pointer; color: var(--accent); }
+.no-inbox ol { margin: 0.5rem 0; padding-left: 1.25rem; }
+.no-inbox li { margin-bottom: 0.3rem; }
+.no-inbox code {
+  font-size: 0.85em; background: var(--bg);
+  padding: 0.05rem 0.25rem; border-radius: 0.25rem;
+}
+
 /* --------------------------------------------------------------- timeline */
 
 .post {
